@@ -1,3 +1,7 @@
+![GitHub repo size](https://img.shields.io/github/repo-size/hendifires/tsunami-prediction-system)
+![GitHub last commit](https://img.shields.io/github/last-commit/hendifires/tsunami-prediction-system)
+![GitHub license](https://img.shields.io/github/license/hendifires/tsunami-prediction-system)
+
 # 🌊 Tsunami Prediction System
 
 A machine learning-based web application for predicting tsunami risks triggered by both tectonic earthquakes and volcanic activity. This system utilizes ensemble classifiers and well-preprocessed geophysical datasets to provide reliable and fast tsunami predictions.
