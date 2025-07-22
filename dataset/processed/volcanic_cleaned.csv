@@ -1,0 +1,565 @@
+year,country,type,latitude,longitude,month,day,elevation,vei,tsu
+79.0,Italy,Complex volcano,40.821,14.426,8.0,25.0,1281.0,5.0,1
+766.0,Japan,Stratovolcano,31.577,130.659,7.0,20.0,1117.0,3.0,1
+1104.0,Iceland,Stratovolcano,63.983,-19.666,10.0,15.0,1490.0,5.0,0
+1158.0,Iceland,Stratovolcano,63.983,-19.666,1.0,19.0,1490.0,4.0,0
+1206.0,Iceland,Stratovolcano,63.983,-19.666,12.0,4.0,1490.0,2.0,0
+1300.0,Iceland,Stratovolcano,63.983,-19.666,7.0,11.0,1490.0,4.0,0
+1311.0,Iceland,Subglacial volcano,63.633,-19.083,1.0,18.0,1490.0,4.0,0
+1329.0,Italy,Stratovolcano,37.748,14.999,6.0,28.0,3357.0,3.0,1
+1329.0,Italy,Stratovolcano,37.748,14.999,7.0,15.0,3357.0,3.0,0
+1341.0,Iceland,Stratovolcano,63.983,-19.666,5.0,19.0,1490.0,3.0,0
+1362.0,Iceland,Stratovolcano,64.0,-16.65,6.0,5.0,2010.0,5.0,0
+1389.0,Iceland,Stratovolcano,63.983,-19.666,12.0,1.0,1490.0,3.0,0
+1410.0,Japan,Stratovolcano,37.125,139.963,3.0,5.0,1915.0,3.0,0
+1471.0,Japan,Stratovolcano,31.577,130.659,11.0,3.0,1117.0,5.0,0
+1510.0,Iceland,Stratovolcano,63.983,-19.666,7.0,25.0,1490.0,4.0,0
+1510.0,Iceland,Stratovolcano,63.983,-19.666,10.0,15.0,1490.0,4.0,0
+1536.0,Italy,Stratovolcano,37.748,14.999,3.0,26.0,3357.0,3.0,0
+1538.0,Italy,Caldera,40.827,14.139,9.0,29.0,458.0,3.0,0
+1564.0,Indonesia,Stratovolcano,1.38,127.53,12.0,31.0,1635.0,3.0,0
+1566.0,Japan,Shield volcano,31.934,130.862,10.0,31.0,1700.0,3.0,0
+1580.0,Portugal,Fissure vent,38.65,-28.08,5.0,1.0,1053.0,3.0,0
+1580.0,Iceland,Subglacial volcano,63.633,-19.083,8.0,11.0,1490.0,4.0,0
+1581.0,Guatemala,Stratovolcano,14.473,-90.88,12.0,26.0,3763.0,4.0,0
+1590.0,Mexico,Stratovolcano,19.514,-103.62,1.0,15.0,3850.0,3.0,0
+1595.0,Colombia,Stratovolcano,4.892,-75.324,3.0,12.0,5279.0,4.0,0
+1596.0,Japan,Complex volcano,36.406,138.523,5.0,1.0,2568.0,2.0,0
+1597.0,Iceland,Stratovolcano,63.983,-19.666,1.0,3.0,1490.0,4.0,0
+1598.0,Japan,Complex volcano,36.406,138.523,5.0,13.0,2568.0,2.0,0
+1600.0,Peru,Stratovolcano,-16.614,-70.854,2.0,19.0,4679.0,6.0,0
+1606.0,Japan,Stratovolcano,33.137,139.766,1.0,23.0,854.0,2.0,1
+1608.0,Indonesia,Stratovolcano,0.81,127.332,7.0,18.0,1714.0,3.0,1
+1625.0,Iceland,Subglacial volcano,63.633,-19.083,9.0,2.0,1490.0,5.0,0
+1630.0,Portugal,Stratovolcano,37.77,-25.32,9.0,3.0,805.0,4.0,0
+1631.0,Italy,Complex volcano,40.821,14.426,12.0,16.0,1281.0,5.0,1
+1636.0,Iceland,Stratovolcano,63.983,-19.666,5.0,15.0,1490.0,3.0,0
+1640.0,Japan,Stratovolcano,42.063,140.677,7.0,31.0,1131.0,5.0,1
+1646.0,Indonesia,Stratovolcano,0.32,127.4,7.0,19.0,1357.0,4.0,1
+1650.0,Greece,Shield volcano,36.404,25.396,9.0,26.0,367.0,4.0,1
+1659.0,El Salvador,Stratovolcano,13.734,-89.294,9.0,30.0,1893.0,3.0,0
+1659.0,Pacific Ocean,Stratovolcano,-6.976,129.144,11.0,11.0,728.0,4.0,1
+1660.0,Ecuador,Stratovolcano,-0.171,-78.598,10.0,27.0,4784.0,4.0,0
+1660.0,Iceland,Subglacial volcano,63.633,-19.083,11.0,3.0,1490.0,4.0,0
+1663.0,Japan,Stratovolcano,42.544,140.839,8.0,16.0,733.0,5.0,0
+1664.0,Japan,Complex volcano,32.761,130.299,4.0,15.0,1483.0,2.0,0
+1669.0,Italy,Stratovolcano,37.748,14.999,3.0,11.0,3357.0,3.0,0
+1669.0,Italy,Stratovolcano,37.748,14.999,3.0,19.0,3357.0,3.0,0
+1672.0,Portugal,Stratovolcano,38.576,-28.713,4.0,24.0,1041.0,2.0,0
+1672.0,Indonesia,Stratovolcano,-7.54,110.446,8.0,4.0,2910.0,3.0,0
+1673.0,Indonesia,Stratovolcano,1.38,127.53,5.0,20.0,1635.0,5.0,1
+1677.0,Spain,Stratovolcano,28.57,-17.83,11.0,22.0,2426.0,2.0,0
+1682.0,Italy,Complex volcano,40.821,14.426,8.0,12.0,1281.0,3.0,0
+1690.0,Italy,Complex volcano,40.821,14.426,2.0,3.0,1281.0,3.0,1
+1692.0,Pacific Ocean,Stratovolcano,-6.312,130.017,6.0,4.0,608.0,4.0,0
+1693.0,Iceland,Stratovolcano,63.983,-19.666,2.0,13.0,1490.0,4.0,1
+1694.0,Pacific Ocean,Caldera,-4.523,129.881,11.0,20.0,596.0,3.0,0
+1706.0,Spain,Stratovolcano,28.271,-16.641,5.0,5.0,3715.0,2.0,1
+1707.0,Japan,Stratovolcano,35.361,138.728,12.0,16.0,3776.0,4.0,0
+1711.0,Indonesia,Stratovolcano,3.689,125.447,12.0,11.0,1318.0,3.0,0
+1712.0,Iceland,Stratovolcano,64.633,-17.516,1.0,15.0,2000.0,2.0,0
+1716.0,Indonesia,Stratovolcano,-7.935,112.314,7.0,20.0,1730.0,2.0,0
+1716.0,Philippines,Stratovolcano,14.011,120.998,9.0,24.0,311.0,4.0,1
+1716.0,Iceland,Stratovolcano,64.633,-17.516,10.0,5.0,2000.0,2.0,0
+1716.0,Japan,Shield volcano,31.934,130.862,11.0,9.0,1700.0,3.0,0
+1717.0,Japan,Shield volcano,31.934,130.862,2.0,7.0,1700.0,3.0,0
+1717.0,Iceland,Stratovolcano,64.633,-17.516,8.0,4.0,2000.0,3.0,0
+1717.0,Guatemala,Stratovolcano,14.473,-90.88,8.0,27.0,3763.0,4.0,1
+1718.0,Portugal,Stratovolcano,38.47,-28.4,2.0,1.0,2351.0,2.0,0
+1721.0,Iceland,Subglacial volcano,63.633,-19.083,5.0,11.0,1490.0,5.0,0
+1721.0,Japan,Complex volcano,36.406,138.523,6.0,22.0,2568.0,1.0,0
+1726.0,Iceland,Stratovolcano,64.633,-17.516,2.0,1.0,2000.0,1.0,0
+1727.0,Iceland,Stratovolcano,64.0,-16.65,8.0,3.0,2010.0,4.0,0
+1729.0,Iceland,Stratovolcano,64.633,-17.516,2.0,1.0,2000.0,1.0,0
+1729.0,Iceland,Caldera,65.715,-16.728,6.0,30.0,800.0,2.0,0
+1730.0,Spain,Fissure vent,29.03,-13.63,9.0,1.0,670.0,2.0,0
+1737.0,Italy,Complex volcano,40.821,14.426,5.0,20.0,1281.0,3.0,0
+1741.0,Japan,Stratovolcano,41.51,139.367,8.0,23.0,732.0,4.0,1
+1742.0,Ecuador,Stratovolcano,-0.677,-78.436,6.0,15.0,5911.0,3.0,0
+1742.0,Ecuador,Stratovolcano,-0.677,-78.436,12.0,9.0,5911.0,3.0,0
+1749.0,Philippines,Stratovolcano,14.011,120.998,8.0,11.0,311.0,3.0,1
+1753.0,Iceland,Caldera,64.416,-17.316,10.0,15.0,1719.0,2.0,0
+1754.0,Philippines,Stratovolcano,14.011,120.998,11.0,28.0,311.0,4.0,1
+1755.0,Iceland,Subglacial volcano,63.633,-19.083,10.0,17.0,1490.0,4.0,0
+1757.0,Portugal,Fissure vent,38.65,-28.08,7.0,9.0,1053.0,0.0,0
+1766.0,Iceland,Stratovolcano,63.983,-19.666,4.0,5.0,1490.0,4.0,0
+1766.0,Philippines,Stratovolcano,13.257,123.685,7.0,20.0,2462.0,3.0,0
+1768.0,Ecuador,Stratovolcano,-0.677,-78.436,4.0,4.0,5911.0,4.0,0
+1772.0,Indonesia,Stratovolcano,0.81,127.332,5.0,9.0,1714.0,3.0,1
+1772.0,Indonesia,Stratovolcano,-7.32,107.73,8.0,12.0,2665.0,3.0,0
+1773.0,Indonesia,Stratovolcano,0.81,127.332,2.0,2.0,1714.0,2.0,0
+1779.0,Italy,Complex volcano,40.821,14.426,8.0,8.0,1281.0,3.0,0
+1779.0,Japan,Stratovolcano,31.577,130.659,11.0,8.0,1117.0,4.0,0
+1780.0,Japan,Stratovolcano,31.577,130.659,2.0,9.0,1117.0,4.0,0
+1780.0,Japan,Stratovolcano,32.458,139.759,7.0,27.0,423.0,3.0,0
+1780.0,Japan,Stratovolcano,31.577,130.659,9.0,9.0,1117.0,4.0,1
+1781.0,Japan,Stratovolcano,31.577,130.659,4.0,11.0,1117.0,4.0,1
+1783.0,Japan,Stratovolcano,32.458,139.759,4.0,10.0,423.0,3.0,0
+1783.0,Japan,Complex volcano,36.406,138.523,8.0,5.0,2568.0,4.0,0
+1785.0,Japan,Stratovolcano,32.458,139.759,4.0,18.0,423.0,3.0,0
+1792.0,Japan,Complex volcano,32.761,130.299,5.0,21.0,1483.0,2.0,1
+1794.0,Italy,Complex volcano,40.821,14.426,6.0,15.0,1281.0,3.0,0
+1800.0,Philippines,Stratovolcano,13.257,123.685,10.0,30.0,2462.0,2.0,0
+1801.0,Japan,Stratovolcano,39.099,140.049,8.0,14.0,2236.0,2.0,0
+1803.0,Japan,Complex volcano,36.406,138.523,7.0,4.0,2568.0,2.0,0
+1803.0,Japan,Complex volcano,36.406,138.523,11.0,7.0,2568.0,2.0,0
+1805.0,Italy,Complex volcano,40.821,14.426,8.0,11.0,1281.0,2.0,0
+1808.0,Portugal,Fissure vent,38.65,-28.08,5.0,1.0,1053.0,1.0,0
+1812.0,St. Vincent & the Grenadines,Stratovolcano,13.33,-61.18,4.0,27.0,1220.0,4.0,0
+1812.0,Indonesia,Stratovolcano,3.689,125.447,8.0,6.0,1318.0,3.0,0
+1814.0,Philippines,Stratovolcano,13.257,123.685,2.0,1.0,2462.0,4.0,0
+1815.0,Indonesia,Stratovolcano,-8.25,118.0,4.0,10.0,2850.0,7.0,1
+1816.0,Japan,Caldera,32.885,131.085,7.0,5.0,1592.0,2.0,0
+1817.0,Indonesia,Stratovolcano,-8.058,114.242,1.0,24.0,2769.0,2.0,0
+1818.0,Mexico,Stratovolcano,19.514,-103.62,2.0,5.0,3850.0,4.0,0
+1820.0,United States,Stratovolcano,54.516,-164.65,3.0,1.0,1563.0,2.0,1
+1820.0,Pacific Ocean,Caldera,-4.523,129.881,6.0,11.0,596.0,2.0,0
+1822.0,Japan,Stratovolcano,42.544,140.839,3.0,9.0,733.0,4.0,0
+1822.0,Indonesia,Stratovolcano,-7.25,108.058,10.0,8.0,2168.0,5.0,0
+1822.0,Indonesia,Stratovolcano,-7.54,110.446,12.0,27.0,2910.0,3.0,0
+1825.0,United States,Stratovolcano,54.756,-163.97,3.0,21.0,2857.0,3.0,1
+1826.0,Indonesia,Complex volcano,-7.2,109.879,10.0,11.0,2565.0,2.0,0
+1826.0,Indonesia,Stratovolcano,-7.935,112.314,10.0,13.0,1730.0,4.0,0
+1827.0,Russia,Stratovolcano,53.256,158.836,6.0,27.0,2717.0,2.0,1
+1827.0,Russia,Stratovolcano,53.256,158.836,8.0,9.0,2717.0,2.0,0
+1832.0,Italy,Stratovolcano,37.748,14.999,11.0,1.0,3357.0,2.0,0
+1832.0,Indonesia,Stratovolcano,-7.54,110.446,12.0,25.0,2910.0,3.0,0
+1833.0,Indonesia,Stratovolcano,-3.522,102.615,11.0,24.0,1940.0,2.0,0
+1835.0,Nicaragua,Stratovolcano,12.98,-87.57,1.0,20.0,872.0,5.0,0
+1838.0,Indonesia,Stratovolcano,0.81,127.332,2.0,26.0,1714.0,2.0,0
+1839.0,Chile,Submarine volcano,-33.62,-76.83,2.0,12.0,-642.0,2.0,1
+1840.0,Indonesia,Stratovolcano,0.81,127.332,2.0,2.0,1714.0,3.0,1
+1840.0,United States,Shield volcano,19.421,-155.287,5.0,30.0,1222.0,0.0,1
+1840.0,Turkey,Stratovolcano,39.7,44.3,7.0,2.0,5165.0,3.0,0
+1843.0,St. Kitts & Nevis,Stratovolcano,17.37,-62.8,2.0,8.0,1156.0,0.0,1
+1843.0,Italy,Stratovolcano,37.748,14.999,11.0,25.0,3357.0,2.0,0
+1845.0,Indonesia,Stratovolcano,1.112,124.737,2.0,8.0,1785.0,2.0,1
+1845.0,Colombia,Stratovolcano,4.892,-75.324,2.0,19.0,5279.0,3.0,0
+1845.0,Iceland,Stratovolcano,63.983,-19.666,9.0,2.0,1490.0,4.0,0
+1846.0,Indonesia,Stratovolcano,-6.77,107.6,5.0,27.0,2084.0,2.0,0
+1846.0,Japan,Stratovolcano,41.805,141.166,11.0,18.0,618.0,1.0,0
+1847.0,Cape Verde,Stratovolcano,14.95,-24.35,4.0,9.0,2829.0,2.0,0
+1847.0,Indonesia,Complex volcano,-7.2,109.879,12.0,4.0,2565.0,2.0,0
+1848.0,Indonesia,Stratovolcano,-7.935,112.314,5.0,16.0,1730.0,3.0,0
+1853.0,Tonga,Shield volcano,-15.6,-175.63,6.0,24.0,260.0,0.0,0
+1853.0,Philippines,Stratovolcano,13.257,123.685,7.0,13.0,2462.0,3.0,0
+1853.0,Taiwan,Submarine volcano,24.0,121.83,10.0,29.0,0.0,2.0,1
+1854.0,Russia,Stratovolcano,56.653,161.36,2.0,18.0,3283.0,5.0,0
+1854.0,Russia,Stratovolcano,50.861,155.565,6.0,27.0,2285.0,3.0,1
+1856.0,Indonesia,Stratovolcano,3.689,125.447,3.0,2.0,1318.0,3.0,1
+1856.0,Japan,Stratovolcano,42.063,140.677,9.0,25.0,1131.0,4.0,0
+1860.0,Guatemala,Stratovolcano,14.473,-90.88,8.0,18.0,3763.0,2.0,0
+1861.0,Eritrea,Stratovolcano,13.579,41.809,5.0,7.0,1625.0,3.0,0
+1861.0,Indonesia,Stratovolcano,0.32,127.4,12.0,29.0,1357.0,4.0,0
+1864.0,Indonesia,Stratovolcano,-7.935,112.314,1.0,3.0,1730.0,2.0,0
+1866.0,Greece,Shield volcano,36.404,25.396,2.0,20.0,367.0,2.0,0
+1866.0,United States,Shield volcano,-14.175,-169.618,9.0,12.0,639.0,2.0,1
+1867.0,Japan,Complex volcano,38.144,140.44,10.0,21.0,1841.0,2.0,0
+1868.0,United States,Shield volcano,19.475,-155.608,4.0,3.0,4170.0,2.0,1
+1869.0,Indonesia,Stratovolcano,-8.542,122.775,7.0,7.0,1703.0,2.0,0
+1871.0,Indonesia,Stratovolcano,2.3,125.37,3.0,3.0,725.0,2.0,1
+1871.0,Philippines,Stratovolcano,9.203,124.673,4.0,30.0,1552.0,2.0,1
+1871.0,Indonesia,Stratovolcano,0.81,127.332,8.0,7.0,1714.0,2.0,0
+1871.0,Philippines,Stratovolcano,13.257,123.685,12.0,8.0,2462.0,3.0,0
+1872.0,Indonesia,Stratovolcano,-7.54,110.446,4.0,15.0,2910.0,4.0,0
+1872.0,Indonesia,Stratovolcano,-7.54,110.446,4.0,17.0,2910.0,4.0,0
+1872.0,Italy,Complex volcano,40.821,14.426,4.0,24.0,1281.0,3.0,0
+1872.0,Indonesia,Stratovolcano,-7.54,110.446,11.0,3.0,2910.0,4.0,0
+1873.0,Philippines,Stratovolcano,7.691,124.507,1.0,16.0,2790.0,2.0,0
+1874.0,Japan,Stratovolcano,34.094,139.526,7.0,3.0,775.0,3.0,0
+1874.0,Philippines,Stratovolcano,14.011,120.998,7.0,19.0,311.0,2.0,0
+1875.0,Indonesia,Stratovolcano,-7.935,112.314,1.0,29.0,1730.0,0.0,0
+1875.0,Iceland,Stratovolcano,65.033,-16.783,3.0,29.0,1080.0,5.0,0
+1877.0,United States,Shield volcano,19.475,-155.608,2.0,14.0,4170.0,0.0,1
+1877.0,Ecuador,Stratovolcano,-0.677,-78.436,6.0,25.0,5911.0,4.0,0
+1878.0,Vanuatu,Stratovolcano,-19.532,169.447,1.0,10.0,361.0,3.0,1
+1878.0,Papua New Guinea,Pyroclastic shield,-4.246,152.194,2.0,4.0,688.0,3.0,1
+1878.0,United States,Shield volcano,53.43,-168.13,8.0,29.0,1073.0,2.0,1
+1879.0,Italy,Stratovolcano,38.789,15.213,2.0,4.0,924.0,2.0,1
+1883.0,Indonesia,Caldera,-6.101,105.423,8.0,27.0,285.0,6.0,1
+1883.0,United States,Lava dome,59.363,-153.435,10.0,6.0,1218.0,4.0,1
+1885.0,Indonesia,Stratovolcano,-8.108,112.922,4.0,18.0,3657.0,2.0,0
+1885.0,Colombia,Stratovolcano,2.32,-76.4,5.0,25.0,4650.0,3.0,0
+1886.0,Ecuador,Stratovolcano,-1.467,-78.442,1.0,11.0,5023.0,4.0,0
+1886.0,New Zealand,Lava dome,-38.157,176.507,6.0,10.0,1111.0,5.0,1
+1886.0,Tonga,Shield volcano,-15.6,-175.63,8.0,31.0,260.0,4.0,0
+1887.0,Philippines,Stratovolcano,13.257,123.685,3.0,9.0,2462.0,3.0,0
+1888.0,Papua New Guinea,Stratovolcano,-5.519,148.115,3.0,13.0,75.0,2.0,1
+1888.0,Japan,Stratovolcano,37.601,140.072,7.0,15.0,1816.0,4.0,0
+1889.0,Indonesia,Submarine volcano,3.138,125.491,9.0,6.0,-5.0,2.0,1
+1890.0,Indonesia,Stratovolcano,0.32,127.4,6.0,29.0,1357.0,2.0,0
+1892.0,Indonesia,Stratovolcano,0.686,99.539,5.0,21.0,2145.0,2.0,0
+1892.0,Indonesia,Stratovolcano,3.689,125.447,6.0,7.0,1318.0,3.0,1
+1892.0,Tonga,Caldera,-19.75,-175.07,8.0,30.0,515.0,2.0,1
+1893.0,Chile,Stratovolcano,-41.33,-72.618,1.0,7.0,1974.0,4.0,0
+1893.0,Japan,Stratovolcano,37.735,140.244,6.0,7.0,1949.0,2.0,0
+1895.0,Indonesia,Stratovolcano,-8.108,112.922,5.0,22.0,3657.0,2.0,0
+1895.0,Papua New Guinea,Stratovolcano,-4.647,145.976,6.0,17.0,1839.0,2.0,0
+1895.0,Japan,Shield volcano,31.934,130.862,10.0,16.0,1700.0,2.0,0
+1896.0,Japan,Shield volcano,31.934,130.862,3.0,15.0,1700.0,2.0,0
+1897.0,Solomon Is.,Stratovolcano,-10.386,165.804,3.0,26.0,796.0,2.0,1
+1897.0,Philippines,Stratovolcano,13.257,123.685,5.0,23.0,2462.0,3.0,0
+1899.0,Colombia,Stratovolcano,1.5,-76.936,11.0,13.0,4137.0,4.0,0
+1900.0,Japan,Complex volcano,36.406,138.523,1.0,22.0,2568.0,2.0,0
+1900.0,Japan,Shield volcano,31.934,130.862,2.0,16.0,1700.0,2.0,0
+1900.0,Japan,Stratovolcano,37.647,140.281,7.0,17.0,1728.0,2.0,0
+1901.0,Indonesia,Stratovolcano,-7.935,112.314,5.0,22.0,1730.0,3.0,0
+1902.0,Martinique,Stratovolcano,14.809,-61.166,5.0,5.0,1372.0,4.0,1
+1902.0,St. Vincent & the Grenadines,Stratovolcano,13.33,-61.18,5.0,7.0,1220.0,4.0,1
+1902.0,Martinique,Stratovolcano,14.809,-61.166,5.0,8.0,1372.0,4.0,1
+1902.0,Martinique,Stratovolcano,14.809,-61.166,5.0,20.0,1372.0,4.0,1
+1902.0,Martinique,Stratovolcano,14.809,-61.166,6.0,6.0,1372.0,4.0,1
+1902.0,Martinique,Stratovolcano,14.809,-61.166,7.0,10.0,1372.0,4.0,1
+1902.0,Japan,Stratovolcano,30.484,140.303,8.0,7.0,394.0,3.0,0
+1902.0,Martinique,Stratovolcano,14.809,-61.166,8.0,30.0,1372.0,4.0,1
+1902.0,Guatemala,Stratovolcano,14.757,-91.552,10.0,25.0,3745.0,6.0,0
+1903.0,New Zealand,Lava dome,-38.157,176.507,8.0,30.0,1111.0,1.0,0
+1904.0,Comoros,Shield volcano,-11.75,43.38,2.0,25.0,2361.0,2.0,0
+1905.0,Italy,Complex volcano,40.821,14.426,3.0,10.0,1281.0,2.0,0
+1905.0,Samoa,Shield volcano,-13.612,-172.525,8.0,4.0,1858.0,2.0,1
+1906.0,Italy,Complex volcano,40.821,14.426,4.0,4.0,1281.0,3.0,1
+1906.0,Samoa,Shield volcano,-13.612,-172.525,11.0,28.0,1858.0,2.0,1
+1907.0,Samoa,Shield volcano,-13.612,-172.525,6.0,8.0,1858.0,2.0,1
+1907.0,Samoa,Shield volcano,-13.612,-172.525,6.0,19.0,1858.0,2.0,1
+1907.0,Samoa,Shield volcano,-13.612,-172.525,6.0,27.0,1858.0,2.0,1
+1907.0,Samoa,Shield volcano,-13.612,-172.525,7.0,9.0,1858.0,2.0,1
+1907.0,Samoa,Shield volcano,-13.612,-172.525,7.0,25.0,1858.0,2.0,1
+1907.0,Ethiopia,Shield volcano,12.888,40.573,8.0,4.0,1496.0,2.0,0
+1907.0,Indonesia,Stratovolcano,-8.542,122.775,9.0,28.0,1703.0,2.0,0
+1909.0,Cameroon,Stratovolcano,4.203,9.17,4.0,28.0,4095.0,2.0,0
+1910.0,Japan,Stratovolcano,42.544,140.839,7.0,25.0,733.0,2.0,0
+1911.0,Philippines,Stratovolcano,14.011,120.998,1.0,30.0,311.0,3.0,1
+1911.0,Japan,Complex volcano,36.406,138.523,5.0,8.0,2568.0,2.0,0
+1911.0,Japan,Complex volcano,36.406,138.523,8.0,15.0,2568.0,2.0,0
+1911.0,Indonesia,Stratovolcano,-8.108,112.922,11.0,8.0,3657.0,3.0,0
+1912.0,United States,Caldera,58.266,-155.159,9.0,6.0,841.0,6.0,0
+1912.0,"Congo, DRC",Shield volcano,-1.408,29.2,12.0,3.0,3058.0,3.0,0
+1913.0,Mexico,Stratovolcano,19.514,-103.62,1.0,20.0,3850.0,4.0,0
+1913.0,Indonesia,Stratovolcano,3.689,125.447,3.0,14.0,1318.0,2.0,1
+1913.0,Japan,Complex volcano,36.406,138.523,5.0,29.0,2568.0,1.0,0
+1913.0,Indonesia,Stratovolcano,-8.108,112.922,6.0,23.0,3657.0,2.0,0
+1913.0,Vanuatu,Pyroclastic shield,-16.25,168.12,12.0,6.0,1334.0,3.0,0
+1914.0,Japan,Stratovolcano,31.577,130.659,1.0,12.0,1117.0,4.0,1
+1915.0,Japan,Submarine volcano,31.888,139.918,6.0,19.0,11.0,0.0,1
+1916.0,Ecuador,Stratovolcano,-1.467,-78.442,3.0,3.0,5023.0,4.0,0
+1916.0,Italy,Stratovolcano,38.789,15.213,7.0,3.0,924.0,3.0,1
+1917.0,Tanzania,Stratovolcano,-2.764,35.914,1.0,1.0,2962.0,3.0,0
+1917.0,New Zealand,Lava dome,-38.157,176.507,4.0,1.0,1111.0,1.0,0
+1917.0,El Salvador,Stratovolcano,13.734,-89.294,6.0,7.0,1893.0,3.0,0
+1918.0,Indonesia,Submarine volcano,3.138,125.491,7.0,18.0,-5.0,3.0,1
+1918.0,Iceland,Subglacial volcano,63.633,-19.083,10.0,12.0,1490.0,4.0,1
+1919.0,Mexico,Stratovolcano,19.023,-98.622,2.0,19.0,5393.0,1.0,0
+1919.0,Indonesia,Submarine volcano,3.138,125.491,4.0,3.0,-5.0,3.0,1
+1919.0,Indonesia,Stratovolcano,-7.935,112.314,5.0,19.0,1730.0,4.0,0
+1919.0,Italy,Stratovolcano,38.789,15.213,5.0,22.0,924.0,3.0,1
+1919.0,United States,Shield volcano,19.475,-155.608,9.0,29.0,4170.0,0.0,1
+1920.0,Indonesia,Stratovolcano,-7.54,110.446,7.0,25.0,2910.0,3.0,0
+1920.0,El Salvador,Stratovolcano,13.813,-89.633,10.0,29.0,1950.0,3.0,0
+1923.0,Vietnam,Submarine volcanoes,10.158,109.014,3.0,2.0,-20.0,2.0,1
+1923.0,Japan,Shield volcano,31.934,130.862,7.0,1.0,1700.0,2.0,0
+1924.0,United States,Shield volcano,19.421,-155.287,5.0,10.0,1222.0,2.0,0
+1924.0,Indonesia,Stratovolcano,-7.32,107.73,12.0,18.0,2665.0,1.0,0
+1926.0,Greece,Shield volcano,36.404,25.396,1.0,23.0,367.0,2.0,0
+1926.0,Japan,Stratovolcano,43.418,142.686,5.0,24.0,2077.0,3.0,0
+1926.0,Japan,Stratovolcano,43.418,142.686,9.0,8.0,2077.0,3.0,0
+1927.0,Iceland,Stratovolcano,64.25,-16.583,9.0,5.0,1620.0,1.0,0
+1928.0,Indonesia,Caldera,-6.101,105.423,3.0,26.0,285.0,2.0,1
+1928.0,Indonesia,Complex volcano,-7.2,109.879,5.0,13.0,2565.0,2.0,0
+1928.0,Indonesia,Stratovolcano,-8.32,121.708,8.0,4.0,875.0,3.0,1
+1928.0,Italy,Stratovolcano,37.748,14.999,11.0,8.0,3357.0,1.0,0
+1929.0,Chile,Stratovolcano,-41.33,-72.618,1.0,6.0,1974.0,3.0,0
+1929.0,Japan,Stratovolcano,42.063,140.677,6.0,17.0,1131.0,4.0,0
+1929.0,Italy,Stratovolcano,37.748,14.999,8.0,2.0,3357.0,1.0,0
+1929.0,Guatemala,Stratovolcano,14.757,-91.552,11.0,2.0,3745.0,3.0,0
+1930.0,Indonesia,Caldera,-6.101,105.423,3.0,17.0,285.0,2.0,1
+1930.0,Japan,Complex volcano,36.406,138.523,8.0,20.0,2568.0,3.0,0
+1930.0,Italy,Stratovolcano,38.789,15.213,9.0,11.0,924.0,3.0,1
+1930.0,Indonesia,Stratovolcano,-7.54,110.446,12.0,18.0,2910.0,3.0,0
+1931.0,Japan,Complex volcano,36.406,138.523,8.0,20.0,2568.0,3.0,0
+1932.0,Guatemala,Stratovolcano,14.473,-90.88,1.0,21.0,3763.0,4.0,0
+1932.0,Japan,Stratovolcano,36.618,138.528,10.0,1.0,2165.0,3.0,0
+1933.0,Russia,Stratovolcano,49.12,154.508,1.0,8.0,1145.0,5.0,1
+1933.0,Japan,Stratovolcano,30.443,130.217,12.0,24.0,657.0,4.0,0
+1933.0,Philippines,Stratovolcano,12.769,124.056,12.0,25.0,1535.0,2.0,1
+1936.0,Japan,Complex volcano,36.406,138.523,7.0,29.0,2568.0,3.0,0
+1937.0,Chile,Stratovolcano,-38.692,-71.729,2.0,9.0,3125.0,2.0,0
+1937.0,Papua New Guinea,Pyroclastic shield,-4.246,152.194,5.0,29.0,688.0,4.0,1
+1938.0,"Congo, DRC",Shield volcano,-1.408,29.2,1.0,28.0,3058.0,1.0,1
+1938.0,Philippines,Stratovolcano,13.257,123.685,6.0,5.0,2462.0,2.0,0
+1938.0,Japan,Complex volcano,36.406,138.523,7.0,16.0,2568.0,1.0,0
+1939.0,Netherlands,Submarine volcano,12.3,-61.64,7.0,24.0,-185.0,1.0,1
+1939.0,Japan,Stratovolcano,30.484,140.303,8.0,17.0,394.0,2.0,0
+1939.0,Indonesia,Complex volcano,-7.2,109.879,10.0,13.0,2565.0,1.0,0
+1940.0,Indonesia,Stratovolcano,2.781,125.407,6.0,20.0,1797.0,2.0,0
+1940.0,Japan,Stratovolcano,34.094,139.526,7.0,12.0,775.0,2.0,0
+1940.0,Tanzania,Stratovolcano,-2.764,35.914,7.0,24.0,2962.0,2.0,0
+1941.0,Japan,Complex volcano,36.406,138.523,7.0,13.0,2568.0,2.0,0
+1941.0,Indonesia,Stratovolcano,-8.108,112.922,9.0,21.0,3657.0,2.0,0
+1943.0,Mexico,Cinder cone,19.85,-101.75,2.0,20.0,3860.0,4.0,0
+1943.0,Ecuador,Shield volcano,-0.92,-91.408,4.0,13.0,1640.0,3.0,0
+1944.0,Italy,Complex volcano,40.821,14.426,3.0,27.0,1281.0,3.0,0
+1944.0,United States,Stratovolcano,52.825,-169.944,6.0,10.0,1730.0,3.0,0
+1944.0,Italy,Stratovolcano,38.789,15.213,8.0,20.0,924.0,2.0,1
+1944.0,Japan,Stratovolcano,42.544,140.839,8.0,26.0,733.0,2.0,0
+1944.0,Indonesia,Complex volcano,-7.2,109.879,12.0,4.0,2565.0,2.0,0
+1944.0,Japan,Stratovolcano,42.544,140.839,12.0,28.0,733.0,2.0,0
+1946.0,Indonesia,Stratovolcano,-8.108,112.922,10.0,29.0,3657.0,2.0,0
+1946.0,Russia,Stratovolcano,48.092,153.2,11.0,13.0,1496.0,4.0,1
+1947.0,Philippines,Stratovolcano,13.257,123.685,1.0,7.0,2462.0,2.0,0
+1947.0,Japan,Complex volcano,36.406,138.523,8.0,14.0,2568.0,2.0,0
+1947.0,Iceland,Stratovolcano,63.983,-19.666,11.0,2.0,1490.0,4.0,0
+1948.0,Indonesia,Complex volcano,-8.532,123.573,4.0,7.0,583.0,2.0,0
+1949.0,Chile,Stratovolcano,-39.42,-71.93,1.0,1.0,2847.0,3.0,0
+1949.0,Colombia,Stratovolcano,2.32,-76.4,5.0,26.0,4650.0,2.0,0
+1950.0,Indonesia,Stratovolcano,-8.108,112.922,8.0,28.0,3657.0,1.0,0
+1950.0,Philippines,Stratovolcano,9.203,124.673,9.0,15.0,1552.0,3.0,0
+1950.0,Japan,Complex volcano,36.406,138.523,9.0,23.0,2568.0,2.0,0
+1951.0,Papua New Guinea,Stratovolcano,-8.95,148.15,1.0,21.0,1680.0,4.0,0
+1951.0,Indonesia,Stratovolcano,-7.935,112.314,8.0,31.0,1730.0,3.0,0
+1951.0,Philippines,Stratovolcano,9.203,124.673,12.0,4.0,1552.0,3.0,0
+1952.0,Japan,Submarine volcano,31.888,139.918,9.0,16.0,11.0,2.0,1
+1952.0,Japan,Submarine volcano,31.888,139.918,9.0,17.0,11.0,2.0,1
+1952.0,Japan,Submarine volcano,31.888,139.918,9.0,23.0,11.0,2.0,1
+1952.0,Japan,Submarine volcano,31.888,139.918,9.0,24.0,11.0,2.0,1
+1952.0,Japan,Submarine volcano,31.888,139.918,9.0,26.0,11.0,2.0,1
+1953.0,Japan,Submarine volcano,31.888,139.918,3.0,11.0,11.0,2.0,1
+1953.0,Indonesia,Stratovolcano,-7.54,110.446,3.0,23.0,2910.0,3.0,0
+1953.0,Japan,Submarine volcano,31.888,139.918,3.0,25.0,11.0,2.0,1
+1953.0,Japan,Caldera,32.885,131.085,4.0,27.0,1592.0,2.0,0
+1953.0,Papua New Guinea,Complex volcano,-2.38,147.35,6.0,27.0,270.0,0.0,1
+1953.0,Japan,Stratovolcano,34.724,139.394,10.0,5.0,746.0,1.0,0
+1954.0,Papua New Guinea,Stratovolcano,-3.613,144.818,8.0,3.0,685.0,2.0,0
+1955.0,Chile,Pyroclastic cone,-40.35,-72.07,7.0,26.0,1114.0,4.0,0
+1955.0,Japan,Stratovolcano,31.577,130.659,10.0,13.0,1117.0,3.0,0
+1956.0,Russia,Stratovolcano,55.972,160.595,3.0,30.0,2882.0,5.0,1
+1957.0,United States,Stratovolcano,53.13,-168.693,3.0,11.0,2149.0,2.0,0
+1957.0,Japan,Stratovolcano,34.724,139.394,10.0,13.0,746.0,2.0,0
+1958.0,Indonesia,Stratovolcano,1.352,124.865,7.0,12.0,1299.0,2.0,0
+1958.0,Vanuatu,Caldera,-16.83,168.523,10.0,7.0,-2.0,2.0,1
+1960.0,Chile,Stratovolcano,-40.59,-72.117,5.0,25.0,2236.0,3.0,1
+1961.0,Chile,Stratovolcano,-41.33,-72.618,1.0,25.0,1974.0,3.0,0
+1961.0,Indonesia,Stratovolcano,-7.54,110.446,5.0,8.0,2910.0,3.0,0
+1961.0,Japan,Complex volcano,36.406,138.523,8.0,18.0,2568.0,2.0,0
+1962.0,Japan,Stratovolcano,43.418,142.686,6.0,29.0,2077.0,3.0,0
+1962.0,Indonesia,Stratovolcano,0.81,127.332,12.0,31.0,1714.0,2.0,0
+1963.0,Costa Rica,Stratovolcano,9.979,-83.852,3.0,17.0,3436.0,3.0,0
+1963.0,Indonesia,Stratovolcano,-8.343,115.508,3.0,18.0,2997.0,5.0,1
+1963.0,Indonesia,Stratovolcano,-8.108,112.922,5.0,5.0,3657.0,2.0,0
+1963.0,Indonesia,Stratovolcano,-8.343,115.508,5.0,16.0,2997.0,3.0,0
+1963.0,Chile,Stratovolcano,-39.42,-71.93,5.0,21.0,2847.0,2.0,0
+1963.0,Indonesia,Caldera,-8.24,115.378,9.0,5.0,1711.0,2.0,0
+1963.0,Guatemala,Stratovolcano,14.473,-90.88,9.0,28.0,3763.0,3.0,0
+1963.0,Costa Rica,Stratovolcano,9.979,-83.852,12.0,10.0,3436.0,3.0,0
+1964.0,Indonesia,Stratovolcano,-8.32,121.708,1.0,1.0,875.0,2.0,0
+1964.0,Chile,Stratovolcano,-39.42,-71.93,3.0,3.0,2847.0,2.0,0
+1964.0,Indonesia,Complex volcano,-7.2,109.879,12.0,13.0,2565.0,1.0,0
+1965.0,Philippines,Stratovolcano,14.011,120.998,9.0,28.0,311.0,4.0,1
+1965.0,Netherlands,Submarine volcano,12.3,-61.64,10.0,24.0,-185.0,0.0,1
+1966.0,Solomon Is.,Stratovolcano,-10.386,165.804,1.0,13.0,796.0,3.0,1
+1966.0,Indonesia,Stratovolcano,-7.935,112.314,4.0,26.0,1730.0,4.0,0
+1966.0,Indonesia,Stratovolcano,3.689,125.447,8.0,12.0,1318.0,4.0,0
+1966.0,Tanzania,Stratovolcano,-2.764,35.914,8.0,14.0,2962.0,4.0,0
+1966.0,Costa Rica,Complex volcano,10.83,-85.324,11.0,6.0,1916.0,3.0,0
+1967.0,Tanzania,Stratovolcano,-2.764,35.914,7.0,8.0,2962.0,3.0,0
+1967.0,Indonesia,Stratovolcano,-8.108,112.922,8.0,31.0,3657.0,3.0,0
+1967.0,Antarctica,Caldera,-62.957,-60.637,12.0,4.0,602.0,3.0,1
+1968.0,Philippines,Stratovolcano,13.257,123.685,4.0,21.0,2462.0,3.0,0
+1968.0,Costa Rica,Stratovolcano,10.463,-84.703,7.0,29.0,1670.0,3.0,0
+1969.0,Indonesia,Stratovolcano,-7.54,110.446,1.0,7.0,2910.0,2.0,0
+1969.0,Indonesia,Stratovolcano,-8.891,121.641,1.0,28.0,618.0,3.0,0
+1969.0,Philippines,Compound volcano,19.077,122.202,3.0,21.0,228.0,2.0,1
+1970.0,Iceland,Stratovolcano,63.983,-19.666,5.0,5.0,1490.0,3.0,0
+1971.0,Chile,Stratovolcano,-45.9,-72.97,8.0,12.0,1905.0,3.0,0
+1971.0,Solomon Is.,Stratovolcano,-10.386,165.804,9.0,6.0,796.0,2.0,1
+1971.0,Guatemala,Stratovolcano,14.473,-90.88,9.0,14.0,3763.0,3.0,0
+1971.0,Spain,Stratovolcano,28.57,-17.83,10.0,28.0,2426.0,2.0,0
+1971.0,Chile,Stratovolcano,-39.42,-71.93,10.0,29.0,2847.0,2.0,0
+1972.0,Papua New Guinea,Stratovolcano,-5.519,148.115,10.0,9.0,75.0,1.0,1
+1973.0,Iceland,Submarine volcano,63.416,-20.266,1.0,27.0,283.0,3.0,0
+1974.0,Indonesia,Stratovolcano,2.781,125.407,2.0,11.0,1797.0,3.0,0
+1974.0,Japan,Stratovolcano,31.577,130.659,6.0,17.0,1117.0,3.0,0
+1974.0,Japan,Lava dome,36.921,138.036,7.0,28.0,2400.0,2.0,0
+1974.0,Japan,Stratovolcano,31.577,130.659,8.0,9.0,1117.0,3.0,0
+1974.0,Guatemala,Stratovolcano,14.473,-90.88,10.0,10.0,3763.0,4.0,0
+1974.0,Papua New Guinea,Stratovolcano,-5.519,148.115,10.0,17.0,75.0,1.0,1
+1974.0,Indonesia,Stratovolcano,-7.54,110.446,10.0,22.0,2910.0,2.0,0
+1975.0,Costa Rica,Stratovolcano,10.463,-84.703,6.0,17.0,1670.0,3.0,0
+1975.0,United States,Shield volcano,19.421,-155.287,11.0,29.0,1222.0,0.0,1
+1976.0,Ecuador,Stratovolcano,-2.005,-78.341,8.0,12.0,5286.0,3.0,0
+1976.0,Indonesia,Stratovolcano,-8.108,112.922,8.0,31.0,3657.0,2.0,0
+1976.0,Indonesia,Stratovolcano,2.781,125.407,9.0,15.0,1797.0,2.0,0
+1976.0,Indonesia,Stratovolcano,-7.54,110.446,11.0,25.0,2910.0,2.0,0
+1977.0,"Congo, DRC",Stratovolcano,-1.52,29.25,1.0,10.0,3470.0,1.0,0
+1977.0,Comoros,Shield volcano,-11.75,43.38,4.0,5.0,2361.0,1.0,0
+1977.0,Iceland,Caldera,65.715,-16.728,4.0,27.0,800.0,1.0,0
+1977.0,Russia,Stratovolcano,56.056,160.642,8.0,2.0,4754.0,3.0,0
+1977.0,Japan,Stratovolcano,42.544,140.839,8.0,7.0,733.0,3.0,0
+1978.0,Philippines,Stratovolcano,12.769,124.056,7.0,29.0,1535.0,2.0,0
+1978.0,Guatemala,Stratovolcano,14.757,-91.552,9.0,2.0,3745.0,3.0,0
+1978.0,Indonesia,Stratovolcano,-8.108,112.922,9.0,19.0,3657.0,3.0,0
+1978.0,Japan,Stratovolcano,42.544,140.839,10.0,24.0,733.0,3.0,0
+1979.0,Indonesia,Complex volcano,-7.2,109.879,2.0,20.0,2565.0,1.0,0
+1979.0,Papua New Guinea,Stratovolcano,-4.647,145.976,3.0,8.0,1839.0,2.0,0
+1979.0,St. Vincent & the Grenadines,Stratovolcano,13.33,-61.18,4.0,13.0,1220.0,3.0,0
+1979.0,Indonesia,Complex volcano,-0.38,100.474,4.0,30.0,2885.0,2.0,0
+1979.0,Japan,Caldera,32.885,131.085,9.0,6.0,1592.0,2.0,0
+1979.0,Italy,Stratovolcano,37.748,14.999,9.0,12.0,3357.0,3.0,0
+1980.0,United States,Stratovolcano,46.2,-122.18,5.0,18.0,2549.0,5.0,1
+1980.0,Iceland,Stratovolcano,63.983,-19.666,8.0,17.0,1490.0,3.0,0
+1981.0,Italy,Stratovolcano,37.748,14.999,3.0,17.0,3357.0,2.0,0
+1981.0,Indonesia,Stratovolcano,-8.108,112.922,3.0,29.0,3657.0,3.0,0
+1981.0,Russia,Stratovolcano,50.861,155.565,4.0,27.0,2285.0,2.0,0
+1981.0,Indonesia,Stratovolcano,-8.108,112.922,5.0,14.0,3657.0,3.0,0
+1981.0,Indonesia,Stratovolcano,-8.32,121.708,9.0,5.0,875.0,2.0,0
+1981.0,Indonesia,Caldera,-6.101,105.423,10.0,20.0,285.0,1.0,1
+1982.0,Mexico,Tuff cone,17.36,-93.23,3.0,29.0,1150.0,5.0,0
+1982.0,Mexico,Tuff cone,17.36,-93.23,4.0,4.0,1150.0,5.0,0
+1982.0,Indonesia,Stratovolcano,-7.25,108.058,5.0,17.0,2168.0,4.0,0
+1982.0,Mexico,Tuff cone,17.36,-93.23,5.0,27.0,1150.0,5.0,0
+1983.0,Russia,Stratovolcano,56.056,160.642,3.0,8.0,4754.0,2.0,0
+1983.0,Indonesia,Stratovolcano,-0.162,121.601,7.0,23.0,404.0,4.0,0
+1983.0,Indonesia,Complex volcano,-8.532,123.573,8.0,17.0,583.0,1.0,1
+1983.0,Japan,Stratovolcano,34.094,139.526,10.0,3.0,775.0,3.0,0
+1984.0,Philippines,Stratovolcano,13.257,123.685,9.0,9.0,2462.0,3.0,0
+1984.0,Italy,Stratovolcano,37.748,14.999,10.0,16.0,3357.0,3.0,0
+1985.0,Indonesia,Stratovolcano,-8.108,112.922,5.0,10.0,3657.0,3.0,0
+1985.0,Colombia,Stratovolcano,4.892,-75.324,11.0,13.0,5279.0,3.0,0
+1985.0,Italy,Stratovolcano,37.748,14.999,12.0,19.0,3357.0,1.0,0
+1986.0,Italy,Stratovolcano,38.789,15.213,7.0,24.0,924.0,2.0,0
+1986.0,Cameroon,Maar,6.25,10.5,8.0,21.0,3011.0,3.0,1
+1986.0,Indonesia,Stratovolcano,-7.54,110.446,10.0,15.0,2910.0,2.0,0
+1986.0,Japan,Stratovolcano,34.724,139.394,11.0,15.0,746.0,3.0,0
+1987.0,Guatemala,Complex volcano,14.382,-90.601,1.0,25.0,2569.0,3.0,0
+1987.0,Italy,Stratovolcano,37.748,14.999,4.0,17.0,3357.0,2.0,0
+1988.0,Pacific Ocean,Caldera,-4.523,129.881,5.0,9.0,596.0,3.0,0
+1988.0,Costa Rica,Stratovolcano,10.463,-84.703,7.0,6.0,1670.0,3.0,0
+1988.0,Indonesia,Stratovolcano,-8.108,112.922,7.0,30.0,3657.0,3.0,0
+1988.0,Chile,Stratovolcano,-38.379,-71.586,12.0,25.0,2832.0,3.0,0
+1990.0,Russia,Stratovolcano,56.653,161.36,2.0,2.0,3283.0,3.0,0
+1990.0,Indonesia,Stratovolcano,-7.935,112.314,2.0,10.0,1730.0,4.0,0
+1990.0,Japan,Caldera,32.885,131.085,3.0,26.0,1592.0,2.0,0
+1990.0,Japan,Caldera,32.885,131.085,4.0,18.0,1592.0,2.0,0
+1990.0,Peru,Stratovolcano,-15.52,-72.65,5.0,29.0,6377.0,3.0,0
+1990.0,Guatemala,Stratovolcano,14.757,-91.552,7.0,19.0,3745.0,3.0,0
+1990.0,Japan,Caldera,32.885,131.085,10.0,19.0,1592.0,2.0,0
+1991.0,Japan,Complex volcano,32.761,130.299,6.0,3.0,1483.0,1.0,0
+1991.0,Philippines,Stratovolcano,15.13,120.35,6.0,15.0,1486.0,6.0,0
+1991.0,Comoros,Shield volcano,-11.75,43.38,7.0,3.0,2361.0,2.0,0
+1991.0,Chile,Stratovolcano,-45.9,-72.97,8.0,8.0,1905.0,5.0,0
+1991.0,Indonesia,Stratovolcano,1.358,124.792,10.0,24.0,1580.0,1.0,0
+1991.0,Italy,Stratovolcano,37.748,14.999,12.0,14.0,3357.0,2.0,0
+1992.0,Indonesia,Stratovolcano,2.781,125.407,1.0,21.0,1797.0,2.0,0
+1992.0,Nicaragua,Cinder cone,12.506,-86.702,4.0,10.0,728.0,3.0,0
+1992.0,Indonesia,Stratovolcano,2.781,125.407,5.0,11.0,1797.0,1.0,0
+1992.0,Indonesia,Complex volcano,-0.38,100.474,7.0,5.0,2885.0,2.0,0
+1992.0,Philippines,Stratovolcano,15.13,120.35,7.0,12.0,1486.0,1.0,0
+1992.0,United States,Stratovolcano,61.299,-152.251,9.0,17.0,3374.0,4.0,0
+1993.0,Colombia,Complex volcano,1.22,-77.37,1.0,14.0,4276.0,2.0,0
+1993.0,Philippines,Stratovolcano,13.257,123.685,2.0,2.0,2462.0,2.0,0
+1993.0,Ecuador,Stratovolcano,-0.171,-78.598,3.0,12.0,4784.0,1.0,0
+1993.0,Indonesia,Caldera,-6.101,105.423,6.0,13.0,285.0,1.0,0
+1993.0,Japan,Complex volcano,32.761,130.299,6.0,23.0,1483.0,1.0,0
+1993.0,Philippines,Stratovolcano,15.13,120.35,6.0,26.0,1486.0,1.0,0
+1994.0,Vanuatu,Stratovolcano,-19.532,169.447,1.0,15.0,361.0,3.0,0
+1994.0,Indonesia,Stratovolcano,-8.108,112.922,2.0,3.0,3657.0,3.0,0
+1994.0,Japan,Caldera,32.885,131.085,5.0,29.0,1592.0,1.0,0
+1994.0,United States,Shield volcano,19.421,-155.287,7.0,8.0,1222.0,3.0,1
+1994.0,Papua New Guinea,Pyroclastic shield,-4.246,152.194,9.0,19.0,688.0,3.0,1
+1994.0,Indonesia,Stratovolcano,-8.42,116.47,11.0,3.0,3726.0,3.0,0
+1994.0,Indonesia,Stratovolcano,-7.54,110.446,11.0,22.0,2910.0,3.0,0
+1995.0,Vanuatu,Stratovolcano,-19.532,169.447,2.0,4.0,361.0,3.0,0
+1995.0,Japan,Stratovolcano,36.227,137.587,2.0,11.0,2455.0,1.0,0
+1995.0,Cape Verde,Stratovolcano,14.95,-24.35,4.0,2.0,2829.0,2.0,0
+1995.0,Guatemala,Complex volcano,14.382,-90.601,4.0,7.0,2569.0,3.0,0
+1996.0,Russia,Stratovolcano,54.049,159.443,1.0,2.0,1513.0,2.0,1
+1996.0,Mexico,Stratovolcano,19.023,-98.622,4.0,30.0,5393.0,3.0,0
+1996.0,Philippines,Stratovolcano,10.41,123.13,8.0,10.0,2422.0,2.0,0
+1996.0,Iceland,Caldera,64.416,-17.316,9.0,30.0,1719.0,3.0,0
+1996.0,Papua New Guinea,Stratovolcano,-4.08,145.037,12.0,3.0,1807.0,3.0,0
+1997.0,Indonesia,Stratovolcano,-7.54,110.446,1.0,14.0,2910.0,2.0,0
+1997.0,Indonesia,Stratovolcano,2.781,125.407,4.0,17.0,1797.0,1.0,0
+1997.0,Montserrat,Stratovolcano,16.72,-62.18,6.0,25.0,915.0,3.0,0
+1997.0,Montserrat,Stratovolcano,16.72,-62.18,8.0,1.0,915.0,3.0,0
+1997.0,Indonesia,Stratovolcano,-8.108,112.922,9.0,2.0,3657.0,3.0,0
+1999.0,Montserrat,Stratovolcano,16.72,-62.18,1.0,20.0,915.0,3.0,1
+1999.0,Guatemala,Stratovolcano,14.473,-90.88,5.0,21.0,3763.0,2.0,0
+1999.0,Russia,Stratovolcano,56.653,161.36,8.0,15.0,3283.0,4.0,0
+1999.0,Ecuador,Stratovolcano,-0.171,-78.598,10.0,5.0,4784.0,3.0,0
+1999.0,Ecuador,Stratovolcano,-1.467,-78.442,10.0,16.0,5023.0,3.0,0
+2000.0,Japan,Stratovolcano,34.094,139.526,6.0,27.0,775.0,2.0,1
+2000.0,Indonesia,Stratovolcano,-8.108,112.922,7.0,27.0,3657.0,3.0,0
+2000.0,Costa Rica,Stratovolcano,10.463,-84.703,8.0,23.0,1670.0,3.0,0
+2001.0,Italy,Stratovolcano,37.748,14.999,5.0,14.0,3357.0,3.0,0
+2001.0,Italy,Stratovolcano,37.748,14.999,7.0,26.0,3357.0,2.0,0
+2001.0,Indonesia,Stratovolcano,-7.54,110.446,8.0,5.0,2910.0,2.0,0
+2001.0,Italy,Stratovolcano,38.789,15.213,10.0,20.0,924.0,2.0,0
+2002.0,Indonesia,Stratovolcano,2.781,125.407,1.0,3.0,1797.0,3.0,0
+2002.0,"Congo, DRC",Stratovolcano,-1.52,29.25,1.0,17.0,3470.0,1.0,0
+2002.0,Italy,Stratovolcano,37.748,14.999,8.0,28.0,3357.0,3.0,0
+2002.0,Ecuador,Stratovolcano,-0.077,-77.656,11.0,3.0,3562.0,4.0,0
+2003.0,Montserrat,Stratovolcano,16.72,-62.18,7.0,12.0,915.0,3.0,1
+2004.0,Indonesia,Stratovolcano,-8.676,122.455,1.0,29.0,1661.0,1.0,0
+2004.0,Indonesia,Stratovolcano,-7.942,112.95,6.0,8.0,2329.0,2.0,0
+2004.0,Papua New Guinea,Stratovolcano,-4.08,145.037,10.0,24.0,1807.0,4.0,0
+2005.0,Papua New Guinea,Stratovolcano,-4.08,145.037,1.0,27.0,1807.0,4.0,0
+2005.0,El Salvador,Stratovolcano,13.853,-89.63,10.0,1.0,2381.0,3.0,0
+2005.0,Comoros,Shield volcano,-11.75,43.38,11.0,25.0,2361.0,3.0,0
+2006.0,New Zealand,Stratovolcano,-29.27,-177.92,3.0,17.0,516.0,1.0,0
+2006.0,Montserrat,Stratovolcano,16.72,-62.18,5.0,20.0,915.0,2.0,1
+2006.0,Philippines,Stratovolcano,12.769,124.056,6.0,7.0,1535.0,2.0,0
+2006.0,Indonesia,Stratovolcano,-7.54,110.446,6.0,14.0,2910.0,1.0,0
+2006.0,Ecuador,Stratovolcano,-1.467,-78.442,7.0,18.0,5023.0,3.0,0
+2006.0,Ecuador,Stratovolcano,-1.467,-78.442,8.0,17.0,5023.0,3.0,0
+2006.0,Philippines,Stratovolcano,13.257,123.685,11.0,30.0,2462.0,1.0,0
+2007.0,Papua New Guinea,Stratovolcano,-5.519,148.115,5.0,19.0,75.0,1.0,1
+2007.0,Yemen,Stratovolcano,15.55,41.83,9.0,30.0,244.0,3.0,0
+2008.0,United States,Stratovolcano,52.177,-175.508,8.0,8.0,314.0,3.0,1
+2008.0,Ecuador,Stratovolcano,-1.467,-78.442,8.0,22.0,5023.0,3.0,0
+2010.0,Iceland,Stratovolcano,63.633,-19.633,3.0,31.0,1651.0,2.0,0
+2010.0,Guatemala,Complex volcano,14.382,-90.601,5.0,27.0,2569.0,1.0,0
+2010.0,Indonesia,Stratovolcano,2.781,125.407,8.0,6.0,1797.0,3.0,0
+2011.0,Philippines,Stratovolcano,12.769,124.056,2.0,23.0,1535.0,2.0,0
+2011.0,Chile,Stratovolcano,-40.59,-72.117,6.0,4.0,2236.0,4.0,0
+2011.0,Eritrea,Stratovolcano,13.37,41.7,6.0,22.0,2218.0,4.0,0
+2011.0,Indonesia,Stratovolcano,0.81,127.332,12.0,27.0,1714.0,3.0,0
+2013.0,Indonesia,Stratovolcano,-8.32,121.708,8.0,10.0,875.0,3.0,0
+2013.0,Indonesia,Stratovolcano,3.17,98.392,9.0,15.0,2460.0,2.0,0
+2014.0,Japan,Complex volcano,35.893,137.48,9.0,27.0,3067.0,3.0,0
+2015.0,Papua New Guinea,Stratovolcano,-4.08,145.037,7.0,31.0,1807.0,2.0,0
+2017.0,Indonesia,Stratovolcano,3.17,98.392,4.0,13.0,2460.0,2.0,0
+2017.0,Guatemala,Stratovolcano,14.473,-90.88,6.0,6.0,3763.0,2.0,0
+2018.0,Papua New Guinea,Stratovolcano,-3.608,144.588,1.0,5.0,365.0,2.0,0
+2018.0,Philippines,Stratovolcano,13.257,123.685,1.0,13.0,2462.0,2.0,0
+2018.0,Japan,Stratovolcano,36.618,138.528,1.0,23.0,2165.0,1.0,0
+2018.0,United States,Shield volcano,19.421,-155.287,2.0,1.0,1222.0,1.0,0
+2018.0,Papua New Guinea,Stratovolcano,-3.608,144.588,2.0,9.0,365.0,2.0,1
+2018.0,Vanuatu,Shield volcano,-15.389,167.835,3.0,30.0,1496.0,3.0,0
+2018.0,United States,Shield volcano,19.421,-155.287,4.0,28.0,1222.0,1.0,1
+2018.0,Guatemala,Stratovolcano,14.473,-90.88,6.0,3.0,3763.0,2.0,0
+2018.0,Papua New Guinea,Stratovolcano,-4.08,145.037,8.0,25.0,1807.0,4.0,0
+2018.0,Vanuatu,Pyroclastic shield,-16.25,168.12,12.0,15.0,1334.0,2.0,0
+2018.0,Indonesia,Caldera,-6.101,105.423,12.0,22.0,285.0,3.0,1
+2018.0,Italy,Stratovolcano,37.748,14.999,12.0,26.0,3357.0,2.0,0
+2019.0,Papua New Guinea,Stratovolcano,-4.08,145.037,1.0,7.0,1807.0,4.0,0
+2019.0,Indonesia,Stratovolcano,3.17,98.392,5.0,7.0,2460.0,4.0,0
+2019.0,Papua New Guinea,Stratovolcano,-5.05,151.33,6.0,26.0,2334.0,4.0,0
+2019.0,Papua New Guinea,Stratovolcano,-4.08,145.037,6.0,28.0,1807.0,4.0,0
+2019.0,Italy,Stratovolcano,38.789,15.213,7.0,3.0,924.0,2.0,1
+2019.0,Italy,Stratovolcano,38.789,15.213,8.0,28.0,924.0,2.0,1
+2019.0,New Zealand,Stratovolcano,-37.52,177.18,12.0,9.0,294.0,2.0,0
+2020.0,Philippines,Stratovolcano,14.011,120.998,1.0,12.0,311.0,4.0,0
+2021.0,Ecuador,Stratovolcano,-2.005,-78.341,3.0,5.0,5286.0,2.0,0
+2021.0,St. Vincent & the Grenadines,Stratovolcano,13.33,-61.18,4.0,9.0,1220.0,4.0,1
+2021.0,Italy,Stratovolcano,38.789,15.213,5.0,19.0,924.0,2.0,1
+2021.0,"Congo, DRC",Stratovolcano,-1.52,29.25,5.0,22.0,3470.0,2.0,0
+2021.0,Spain,Stratovolcano,28.57,-17.83,9.0,19.0,2426.0,3.0,0
+2021.0,Indonesia,Stratovolcano,-8.108,112.922,12.0,4.0,3657.0,4.0,0
+2022.0,Tonga,Submarine volcano,-20.553,-175.384,1.0,15.0,114.0,5.0,1
+2022.0,Mexico,Stratovolcano,19.023,-98.622,6.0,22.0,5393.0,2.0,0
+2022.0,Italy,Stratovolcano,38.789,15.213,10.0,9.0,924.0,2.0,1
+2022.0,Italy,Stratovolcano,38.789,15.213,12.0,4.0,924.0,2.0,1
+2022.0,Indonesia,Stratovolcano,-8.108,112.922,12.0,4.0,3657.0,4.0,0
+2023.0,Papua New Guinea,Lava cone,-6.137,155.196,7.0,7.0,1855.0,2.0,0
+2024.0,Indonesia,Complex volcano,-0.38,100.474,5.0,11.0,2885.0,2.0,0
+2024.0,Philippines,Stratovolcano,10.41,123.13,6.0,3.0,2422.0,3.0,0
+2024.0,Russia,Stratovolcano,56.653,161.36,8.0,17.0,3283.0,4.0,1

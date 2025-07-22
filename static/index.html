@@ -1,0 +1,323 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Tsunami Prediction</title>
+  <style>
+    body {
+      font-family: 'Segoe UI', Arial, sans-serif;
+      background: #f4f8fb;
+      margin: 0;
+      padding: 0;
+      min-height: 100vh;
+    }
+    .container {
+      background: #fff;
+      max-width: 500px;
+      margin: 40px auto 0 auto;
+      border-radius: 16px;
+      box-shadow: 0 4px 16px rgba(40,80,120,0.12);
+      padding: 32px 28px 24px 28px;
+    }
+    h1 {
+      text-align: center;
+      color: #1a3a5d;
+      margin-top: 0;
+    }
+    .tabs {
+      text-align: center;
+      margin-bottom: 28px;
+    }
+    .tab-btn {
+      padding: 9px 28px;
+      margin-right: 10px;
+      border-radius: 24px;
+      border: none;
+      background: #e0eaf4;
+      color: #1a3a5d;
+      font-weight: 600;
+      cursor: pointer;
+      font-size: 1rem;
+      transition: background 0.15s;
+    }
+    .tab-btn.active {
+      background: #2e72c5;
+      color: #fff;
+    }
+    form > div {
+      margin-bottom: 18px;
+    }
+    label {
+      display: block;
+      margin-bottom: 6px;
+      font-weight: bold;
+      color: #1a3a5d;
+    }
+    input,
+    select {
+      width: 100%;
+      padding: 8px 10px;
+      border: 1px solid #b6c5dd;
+      border-radius: 7px;
+      font-size: 1rem;
+      background: #fafdff;
+      transition: border 0.2s;
+    }
+    input:focus, select:focus {
+      outline: none;
+      border-color: #2e72c5;
+    }
+    button[type="submit"] {
+      width: 100%;
+      padding: 12px;
+      border-radius: 10px;
+      background: linear-gradient(90deg,#2e72c5,#3db0b6);
+      color: #fff;
+      font-weight: bold;
+      border: none;
+      font-size: 1.1rem;
+      margin-top: 10px;
+      cursor: pointer;
+      transition: box-shadow 0.18s;
+      box-shadow: 0 2px 6px rgba(50,110,200,0.10);
+    }
+    button[type="submit"]:hover {
+      background: linear-gradient(90deg,#2675d8,#43c1c8);
+    }
+    .hidden {
+      display: none;
+    }
+    #result {
+      margin-top: 28px;
+      font-size: 1.11rem;
+      color: #244a65;
+      padding: 15px;
+      background: #e6f3f8;
+      border-radius: 7px;
+      min-height: 22px;
+      text-align: center;
+      border: 1px solid #bee2f0;
+    }
+    @media (max-width: 600px) {
+      .container {
+        padding: 18px 7px 12px 7px;
+        max-width: 98vw;
+      }
+      .tabs button { font-size: 0.95rem; }
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h1>Tsunami Prediction</h1>
+    <div class="tabs">
+      <button id="btn-tec" class="tab-btn active" onclick="showForm('tec')">Tectonic Earthquake</button>
+      <button id="btn-vul" class="tab-btn" onclick="showForm('vul')">Volcanic Activity</button>
+    </div>
+    <!-- Tectonic form -->
+    <form id="form-tec">
+      <div>
+        <label for="mag">Magnitude (Mag):</label>
+        <input type="number" step="0.01" id="mag" name="mag" required />
+      </div>
+      <div>
+        <label for="depth">Focal Depth (km):</label>
+        <input type="number" step="0.01" id="depth" name="depth" required />
+      </div>
+      <div>
+        <label for="latitude_tec">Latitude:</label>
+        <input type="number" step="0.0001" id="latitude_tec" name="latitude" required />
+      </div>
+      <div>
+        <label for="longitude_tec">Longitude:</label>
+        <input type="number" step="0.0001" id="longitude_tec" name="longitude" required />
+      </div>
+      <div>
+        <label for="country_tec">Country:</label>
+        <select id="country_tec" name="country" required></select>
+      </div>
+      <div>
+        <label for="is_subduction_zone">Subduction Zone:</label>
+        <select id="is_subduction_zone" name="is_subduction_zone" required>
+          <option value="">--Select--</option>
+          <option value="1">Yes</option>
+          <option value="0">No</option>
+        </select>
+      </div>
+      <div>
+        <label for="distance_to_coast_km">Distance to Coast (km):</label>
+        <input type="number" step="0.01" id="distance_to_coast_km" name="distance_to_coast_km" required />
+      </div>
+      <button type="submit">Predict</button>
+    </form>
+    <!-- Volcanic form -->
+    <form id="form-vul" class="hidden">
+      <div>
+        <label for="eq">Earthquake Magnitude (Eq):</label>
+        <input type="number" step="0.01" id="eq" name="eq" required />
+      </div>
+      <div>
+        <label for="elevation">Elevation (m):</label>
+        <input type="number" step="1" id="elevation" name="elevation" required />
+      </div>
+      <div>
+        <label for="latitude_vul">Latitude:</label>
+        <input type="number" step="0.0001" id="latitude_vul" name="latitude" required />
+      </div>
+      <div>
+        <label for="longitude_vul">Longitude:</label>
+        <input type="number" step="0.0001" id="longitude_vul" name="longitude" required />
+      </div>
+      <div>
+        <label for="country_vul">Country:</label>
+        <select id="country_vul" name="country" required></select>
+      </div>
+      <div>
+        <label for="type">Volcano Type:</label>
+        <select id="type" name="type" required>
+          <option value="">--Select Type--</option>
+          <option value="Caldera">Caldera</option>
+          <option value="Stratovolcano">Stratovolcano</option>
+          <option value="Complex volcano">Complex volcano</option>
+          <option value="Shield volcano">Shield volcano</option>
+          <option value="Pyroclastic shield">Pyroclastic shield</option>
+          <option value="Volcanic field">Volcanic field</option>
+          <option value="Lava dome">Lava dome</option>
+          <option value="Subglacial volcano">Subglacial volcano</option>
+          <option value="Crater rows">Crater rows</option>
+          <option value="Tuff cone">Tuff cone</option>
+          <option value="Fissure vent">Fissure vent</option>
+          <option value="Pyroclastic cone">Pyroclastic cone</option>
+          <option value="Submarine volcano">Submarine volcano</option>
+          <option value="Lava cone">Lava cone</option>
+          <option value="Pumice cone">Pumice cone</option>
+          <option value="Mud volcano">Mud volcano</option>
+          <option value="Submarine volcanoes">Submarine volcanoes</option>
+          <option value="Cinder cone">Cinder cone</option>
+          <option value="Compound volcano">Compound volcano</option>
+          <option value="Maar">Maar</option>
+        </select>
+      </div>
+      <div>
+        <label for="vei">VEI:</label>
+        <input type="number" step="1" id="vei" name="vei" required />
+      </div>
+      <div>
+        <label for="distance_to_coast_km_vul">Distance to Coast (km):</label>
+        <input type="number" step="0.01" id="distance_to_coast_km_vul" name="distance_to_coast_km" required />
+      </div>
+      <div>
+        <label for="is_subduction_zone_vul">Subduction Zone:</label>
+        <select id="is_subduction_zone_vul" name="is_subduction_zone" required>
+          <option value="">--Select--</option>
+          <option value="1">Yes</option>
+          <option value="0">No</option>
+        </select>
+      </div>
+      <button type="submit">Predict</button>
+    </form>
+    <div id="result"></div>
+  </div>
+  <script>
+    // List country lengkap ISO-3166 (bisa ditambah)
+    const countries = [
+      "Afghanistan","Albania","Algeria","Andorra","Angola","Antigua and Barbuda","Argentina","Armenia","Australia","Austria","Azerbaijan","Bahamas","Bahrain","Bangladesh","Barbados","Belarus","Belgium","Belize","Benin","Bhutan","Bolivia","Bosnia and Herzegovina","Botswana","Brazil","Brunei","Bulgaria","Burkina Faso","Burundi","Cambodia","Cameroon","Canada","Cape Verde","Central African Republic","Chad","Chile","China","Colombia","Comoros","Congo","Costa Rica","Croatia","Cuba","Cyprus","Czech Republic","Denmark","Djibouti","Dominica","Dominican Republic","East Timor","Ecuador","Egypt","El Salvador","Equatorial Guinea","Eritrea","Estonia","Eswatini","Ethiopia","Fiji","Finland","France","Gabon","Gambia","Georgia","Germany","Ghana","Greece","Grenada","Guatemala","Guinea","Guinea-Bissau","Guyana","Haiti","Honduras","Hungary","Iceland","India","Indonesia","Iran","Iraq","Ireland","Israel","Italy","Jamaica","Japan","Jordan","Kazakhstan","Kenya","Kiribati","Kosovo","Kuwait","Kyrgyzstan","Laos","Latvia","Lebanon","Lesotho","Liberia","Libya","Liechtenstein","Lithuania","Luxembourg","Madagascar","Malawi","Malaysia","Maldives","Mali","Malta","Marshall Islands","Mauritania","Mauritius","Mexico","Micronesia","Moldova","Monaco","Mongolia","Montenegro","Morocco","Mozambique","Myanmar","Namibia","Nauru","Nepal","Netherlands","New Zealand","Nicaragua","Niger","Nigeria","North Korea","North Macedonia","Norway","Oman","Pakistan","Palau","Panama","Papua New Guinea","Paraguay","Peru","Philippines","Poland","Portugal","Qatar","Romania","Russia","Rwanda","Saint Kitts and Nevis","Saint Lucia","Saint Vincent and the Grenadines","Samoa","San Marino","Sao Tome and Principe","Saudi Arabia","Senegal","Serbia","Seychelles","Sierra Leone","Singapore","Slovakia","Slovenia","Solomon Islands","Somalia","South Africa","South Korea","South Sudan","Spain","Sri Lanka","Sudan","Suriname","Sweden","Switzerland","Syria","Tajikistan","Tanzania","Thailand","Togo","Tonga","Trinidad and Tobago","Tunisia","Turkey","Turkmenistan","Tuvalu","Uganda","Ukraine","United Arab Emirates","United Kingdom","United States","Uruguay","Uzbekistan","Vanuatu","Vatican City","Venezuela","Vietnam","Yemen","Zambia","Zimbabwe"
+    ];
+
+    function populateCountries(selectId) {
+      const sel = document.getElementById(selectId);
+      sel.innerHTML = '<option value="">--Select Country--</option>';
+      countries.forEach(c => {
+        const opt = document.createElement("option");
+        opt.value = c;
+        opt.textContent = c;
+        sel.appendChild(opt);
+      });
+    }
+    populateCountries("country_tec");
+    populateCountries("country_vul");
+
+    function showForm(formName) {
+      document.getElementById("result").textContent = "";
+      document.getElementById("btn-tec").classList.remove("active");
+      document.getElementById("btn-vul").classList.remove("active");
+      if (formName === "tec") {
+        document.getElementById("form-tec").classList.remove("hidden");
+        document.getElementById("form-vul").classList.add("hidden");
+        document.getElementById("btn-tec").classList.add("active");
+      } else {
+        document.getElementById("form-tec").classList.add("hidden");
+        document.getElementById("form-vul").classList.remove("hidden");
+        document.getElementById("btn-vul").classList.add("active");
+      }
+    }
+
+    document.getElementById("form-tec").addEventListener("submit", async (e) => {
+      e.preventDefault();
+      const data = {
+        mag: parseFloat(document.getElementById("mag").value),
+        depth: parseFloat(document.getElementById("depth").value),
+        latitude: parseFloat(document.getElementById("latitude_tec").value),
+        longitude: parseFloat(document.getElementById("longitude_tec").value),
+        country: document.getElementById("country_tec").value,
+        is_subduction_zone: parseInt(document.getElementById("is_subduction_zone").value),
+        distance_to_coast_km: parseFloat(document.getElementById("distance_to_coast_km").value)
+      };
+      try {
+        const res = await fetch("/v1/predict/tectonic", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ datas: [data] }),
+        });
+        const json = await res.json();
+        document.getElementById("result").innerHTML =
+          json.predictions && json.probabilities
+            ? `<b>Prediction (Tectonic):</b> ${
+                json.predictions[0] === 1 ? "Tsunamigenic" : "Non-Tsunamigenic"
+              }<br>
+              <b>Probability:</b> ${(json.probabilities[0] * 100).toFixed(1)} %`
+            : `<span style="color:red;">Error: No result.</span>`;
+      } catch (err) {
+        document.getElementById("result").innerHTML =
+          `<span style="color:red;">Error: ${err.message}</span>`;
+      }
+    });
+
+    document.getElementById("form-vul").addEventListener("submit", async (e) => {
+      e.preventDefault();
+      const data = {
+        eq: parseFloat(document.getElementById("eq").value),
+        elevation: parseFloat(document.getElementById("elevation").value),
+        latitude: parseFloat(document.getElementById("latitude_vul").value),
+        longitude: parseFloat(document.getElementById("longitude_vul").value),
+        country: document.getElementById("country_vul").value,
+        type: document.getElementById("type").value,
+        vei: parseInt(document.getElementById("vei").value),
+        distance_to_coast_km: parseFloat(document.getElementById("distance_to_coast_km_vul").value),
+        is_subduction_zone: parseInt(document.getElementById("is_subduction_zone_vul").value)
+      };
+      try {
+        const res = await fetch("/v1/predict/volcanic", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ datas: [data] }),
+        });
+        const json = await res.json();
+        document.getElementById("result").innerHTML =
+          json.predictions && json.probabilities
+            ? `<b>Prediction (Volcanic):</b> ${
+                json.predictions[0] === 1 ? "Tsunamigenic" : "Non-Tsunamigenic"
+              }<br>
+              <b>Probability:</b> ${(json.probabilities[0] * 100).toFixed(1)} %`
+            : `<span style="color:red;">Error: No result.</span>`;
+      } catch (err) {
+        document.getElementById("result").innerHTML =
+          `<span style="color:red;">Error: ${err.message}</span>`;
+      }
+    });
+
+    showForm("tec");
+  </script>
+</body>
+</html>
