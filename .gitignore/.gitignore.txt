@@ -1,0 +1,17 @@
+# Virtual environment
+.venv/
+
+# Python cache
+__pycache__/
+*.py[cod]
+*.pkl
+*.joblib
+*.save
+*.lock
+
+# Jupyter Notebook
+.ipynb_checkpoints/
+
+# OS metadata
+.DS_Store
+Thumbs.db
