@@ -1,17 +1,14 @@
-# Virtual environment
+# .gitignore
+venv/
 .venv/
-
-# Python cache
 __pycache__/
-*.py[cod]
 *.pkl
-*.joblib
 *.save
-*.lock
-
-# Jupyter Notebook
-.ipynb_checkpoints/
-
-# OS metadata
+*.dll
+*.so
+*.pyc
+*.ipynb_checkpoints/
+*.log
 .DS_Store
-Thumbs.db
+*.xlsx
+output/
