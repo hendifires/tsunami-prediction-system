@@ -1,0 +1,5 @@
+.venv/
+*.save
+*.dll
+*.pyd
+*.h5
