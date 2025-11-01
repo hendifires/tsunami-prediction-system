@@ -9,7 +9,6 @@ import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
 import seaborn as sns
-from matplotlib import ticker as mticker
 
 sns.set_theme(style="whitegrid")
 
@@ -60,7 +59,6 @@ def _load_dataset(name: str) -> pd.DataFrame:
     for p in cands:
         if p.exists():
             df = pd.read_csv(p)
-            # singkirkan kolom duplikat (jaga-jaga)
             df = df.loc[:, ~df.columns.duplicated()].copy()
             return df
     raise FileNotFoundError(f"[EDA] Processed dataset not found for '{name}'. Tried: {cands}")
@@ -109,7 +107,7 @@ def missing_value_fraction(df: pd.DataFrame, name: str):
 
 def numeric_distributions(df: pd.DataFrame, numeric_cols: list[str], name: str):
     numeric_cols = [c for c in numeric_cols if c in df.columns]
-    if len(numeric_cols) == 0:
+    if not numeric_cols:  # simplified len-comparison
         return
     cols = min(4, len(numeric_cols))
     rows = int(np.ceil(len(numeric_cols) / cols))
@@ -156,9 +154,7 @@ def pairplot_sample(df: pd.DataFrame, cols: list[str], hue: str, name: str, max_
     use_cols = [c for c in cols if c in df.columns]
     if hue in use_cols:
         use_cols.remove(hue)
-    # hanya numeric
     num_cols = [c for c in use_cols if pd.api.types.is_numeric_dtype(df[c])]
-    # pastikan unik
     num_cols = list(dict.fromkeys(num_cols))
     if hue not in df.columns or len(num_cols) < 2:
         return
@@ -167,7 +163,6 @@ def pairplot_sample(df: pd.DataFrame, cols: list[str], hue: str, name: str, max_
     if len(sub) > max_rows:
         sub = sub.sample(max_rows, random_state=42)
 
-    # guard tambahan: tak boleh ada kolom 2D/object aneh
     for c in num_cols:
         if sub[c].apply(lambda x: isinstance(x, (list, tuple, np.ndarray))).any():
             num_cols.remove(c)
@@ -189,7 +184,6 @@ def pairplot_sample(df: pd.DataFrame, cols: list[str], hue: str, name: str, max_
 def temporal_plots(df: pd.DataFrame, name: str, target: str = "tsu"):
     """
     Plot jumlah event per tahun (khusus tsu==1 jika target tersedia).
-    Jika hanya ada 'year', gunakan itu; jika ada month/day akan dipakai untuk validasi.
     """
     if "year" not in df.columns:
         return
@@ -197,7 +191,6 @@ def temporal_plots(df: pd.DataFrame, name: str, target: str = "tsu"):
     if target in dfx.columns:
         dfx = dfx[dfx[target] == 1]
 
-    # jaga-jaga: pastikan integer year
     yr = pd.to_numeric(dfx["year"], errors="coerce").dropna().astype(int)
     if yr.empty:
         return
@@ -222,11 +215,14 @@ def temporal_plots(df: pd.DataFrame, name: str, target: str = "tsu"):
 
 
 def spatial_scatter(df: pd.DataFrame, name: str, target: str = "tsu"):
-    """Peta global: coba PyGMT tilemap; jika gagal, fallback scatter lon/lat."""
+    """Peta global. Default pakai fallback scatter (tanpa PyGMT, tanpa warning).
+    Set env EDA_USE_PYGMT=1 untuk mencoba tilemap PyGMT dengan warnings disenyapkan."""
+    import os
+
     if not {"latitude", "longitude"}.issubset(df.columns):
         return
 
-    # --- fallback scatter globe ---
+    # --- fallback scatter (bersih & cepat) ---
     def _fallback():
         plt.figure(figsize=(7.5, 3.8))
         plt.axhline(0, color="lightgray", lw=0.8)
@@ -235,113 +231,170 @@ def spatial_scatter(df: pd.DataFrame, name: str, target: str = "tsu"):
         plt.ylim(-90, 90)
         if target in df.columns:
             sns.scatterplot(
-                data=df,
-                x="longitude",
-                y="latitude",
-                hue=target,
-                s=8,
-                alpha=0.6,
-                palette="Set1",
+                data=df, x="longitude", y="latitude",
+                hue=target, s=8, alpha=0.6, palette="Set1"
             )
             plt.legend(title=target, loc="upper right")
         else:
             plt.scatter(df["longitude"], df["latitude"], s=8, alpha=0.6)
         plt.title(f"Global Scatter (lon/lat) — {name}")
-        plt.xlabel("Longitude")
-        plt.ylabel("Latitude")
+        plt.xlabel("Longitude"); plt.ylabel("Latitude")
         _savefig(FIG / f"{name}_global_scatter.png")
+
+    # pakai PyGMT hanya jika diminta lewat env
+    if os.getenv("EDA_USE_PYGMT", "0") != "1":
+        _fallback()
+        return
 
     try:
         import pygmt  # type: ignore
-        fig = pygmt.Figure()
-        fig.tilemap(
-            region=[-180, 180, -75, 75],
-            projection="M120/0/20c",
-            source="https://server.arcgisonline.com/ArcGIS/rest/services/World_Street_Map/MapServer/tile/{z}/{y}/{x}.png",
-            frame=["xafg", "yafg", f"+t{name.capitalize()} Events: Global Distribution"],
-        )
-        if target in df.columns:
-            for val in sorted(pd.Series(df[target]).dropna().unique()):
-                sub = df[df[target] == val]
-                fig.plot(
-                    x=sub["longitude"],
-                    y=sub["latitude"],
-                    style="c0.08c",
-                    fill=("red" if int(val) == 1 else "dodgerblue"),
-                    pen="black",
-                    label=f"tsu={int(val)}",
-                )
-            fig.legend(position="JTR+jTR+o0.3c", box=True)
-        else:
-            fig.plot(x=df["longitude"], y=df["latitude"], style="c0.08c", fill="black", pen="black")
-        out = FIG / f"{name}_global_map.png"
-        fig.savefig(str(out))
+        # Senyapkan log GMT (hindari warning “(s - y_min) …”)
+        with pygmt.config(VERBOSE="q"):
+            fig = pygmt.Figure()
+            fig.tilemap(
+                region=[-180, 180, -75, 75],
+                projection="M120/0/20c",
+                source=("https://server.arcgisonline.com/ArcGIS/rest/services/"
+                        "World_Street_Map/MapServer/tile/{z}/{y}/{x}.png"),
+                frame=["xafg", "yafg", f"+t{name.capitalize()} Events: Global Distribution"],
+            )
+            if target in df.columns:
+                for val in sorted(pd.Series(df[target]).dropna().unique()):
+                    sub = df[df[target] == val]
+                    fig.plot(
+                        x=sub["longitude"], y=sub["latitude"],
+                        style="c0.08c",
+                        fill=("red" if int(val) == 1 else "dodgerblue"),
+                        pen="black", label=f"tsu={int(val)}",
+                    )
+                fig.legend(position="JTR+jTR+o0.3c", box=True)
+            else:
+                fig.plot(x=df["longitude"], y=df["latitude"], style="c0.08c", fill="black", pen="black")
+            fig.savefig(str(FIG / f"{name}_global_map.png"))
     except Exception:
         _fallback()
+
+# ---------- SMALL HELPERS TO REMOVE DUPLICATION ----------
+def _plot_top_counts(
+    s: pd.Series,
+    title: str,
+    xlabel: str,
+    outfile: str,
+    orient: str = "h",
+    table_name: str | None = None,
+):
+    """
+    s: Series berisi hitungan (index = kategori, values = count)
+    orient: 'h' (horizontal bar) atau 'v' (vertical bar)
+    """
+    s = s.dropna()
+    if s.empty:
+        return
+    if table_name:
+        _savetab(s.rename_axis(s.index.name or "key").reset_index(name="count"), TAB / table_name)
+
+    plt.figure(figsize=(9, 4.2))
+    if orient == "h":
+        sns.barplot(x=s.values, y=s.index)
+        plt.xlabel(xlabel)
+        plt.ylabel(s.index.name or "")
+    else:
+        sns.barplot(x=s.index, y=s.values)
+        plt.ylabel(xlabel)
+        plt.xlabel(s.index.name or "")
+        plt.xticks(rotation=30, ha="right")
+    plt.title(title)
+    _savefig(FIG / outfile)
+
+
+def _plot_top_mean(
+    series: pd.Series,
+    title: str,
+    xlabel: str,
+    outfile: str,
+    table_name: str,
+):
+    s = series.sort_values(ascending=False).head(10)
+    if s.empty:
+        return
+    _savetab(s.rename(series.name).reset_index(), TAB / table_name)
+    plt.figure(figsize=(9, 4))
+    sns.barplot(x=s.values, y=s.index)
+    plt.title(title)
+    plt.xlabel(xlabel)
+    _savefig(FIG / outfile)
 
 
 def categorical_and_country_plots(df_t: pd.DataFrame, df_v: pd.DataFrame):
     # Tektonik: top 8 region
     if "region" in df_t.columns:
         top = df_t["region"].value_counts().nlargest(8)
-        _savetab(top.rename_axis("region").reset_index(name="count"), TAB / "tectonic_top_regions.csv")
-        plt.figure(figsize=(8, 4))
-        sns.countplot(y="region", data=df_t[df_t["region"].isin(top.index)], order=top.index)
-        plt.title("Tectonic: Top 8 Region")
-        plt.xlabel("Number of Earthquake Events")
-        _savefig(FIG / "tectonic_top_regions.png")
+        _plot_top_counts(
+            top,
+            title="Tectonic: Top 8 Region",
+            xlabel="Number of Earthquake Events",
+            outfile="tectonic_top_regions.png",
+            orient="h",
+            table_name="tectonic_top_regions.csv",
+        )
 
     # Tektonik: top 10 countries tsunami
     if {"country", "tsu"}.issubset(df_t.columns):
         s = df_t[df_t["tsu"] == 1]["country"].value_counts().nlargest(10)
-        _savetab(s.rename_axis("country").reset_index(name="count"), TAB / "tectonic_top_countries_tsu.csv")
-        plt.figure(figsize=(9, 4.2))
-        sns.barplot(x=s.values, y=s.index)
-        plt.title("Tectonic: Top 10 Countries with Tsunami (tsu=1)")
-        plt.xlabel("Number of Tsunamis")
-        plt.ylabel("Country")
-        _savefig(FIG / "tectonic_top_countries_tsu.png")
+        _plot_top_counts(
+            s,
+            title="Tectonic: Top 10 Countries with Tsunami (tsu=1)",
+            xlabel="Number of Tsunamis",
+            outfile="tectonic_top_countries_tsu.png",
+            orient="h",
+            table_name="tectonic_top_countries_tsu.csv",
+        )
 
     # Tektonik: mean magnitude by country
     if {"country", "mag"}.issubset(df_t.columns):
-        mean_mag = df_t.groupby("country")["mag"].mean().sort_values(ascending=False).head(10)
-        _savetab(mean_mag.rename("mean_mag").reset_index(), TAB / "tectonic_mean_mag_by_country.csv")
-        plt.figure(figsize=(9, 4))
-        sns.barplot(x=mean_mag.values, y=mean_mag.index)
-        plt.title("Tectonic: Top 10 Average Magnitude per Country")
-        plt.xlabel("Average Magnitude")
-        _savefig(FIG / "tectonic_mean_mag_by_country.png")
+        mean_mag = df_t.groupby("country")["mag"].mean()
+        _plot_top_mean(
+            mean_mag,
+            title="Tectonic: Top 10 Average Magnitude per Country",
+            xlabel="Average Magnitude",
+            outfile="tectonic_mean_mag_by_country.png",
+            table_name="tectonic_mean_mag_by_country.csv",
+        )
 
     # Vulkanik: top 8 type
     if "type" in df_v.columns:
         top = df_v["type"].value_counts().nlargest(8)
-        _savetab(top.rename_axis("type").reset_index(name="count"), TAB / "volcanic_top_types.csv")
-        plt.figure(figsize=(8, 4))
-        sns.countplot(y="type", data=df_v[df_v["type"].isin(top.index)], order=top.index)
-        plt.title("Volcanic: Top 8 Volcano Type")
-        plt.xlabel("Number of eruption events")
-        _savefig(FIG / "volcanic_top_types.png")
+        _plot_top_counts(
+            top,
+            title="Volcanic: Top 8 Volcano Type",
+            xlabel="Number of eruption events",
+            outfile="volcanic_top_types.png",
+            orient="h",
+            table_name="volcanic_top_types.csv",
+        )
 
     # Vulkanik: top 10 countries tsunami
     if {"country", "tsu"}.issubset(df_v.columns):
         s = df_v[df_v["tsu"] == 1]["country"].value_counts().nlargest(10)
-        _savetab(s.rename_axis("country").reset_index(name="count"), TAB / "volcanic_top_countries_tsu.csv")
-        plt.figure(figsize=(9, 4.2))
-        sns.barplot(x=s.values, y=s.index)
-        plt.title("Volcanic: Top 10 Countries with Tsunami (tsu=1)")
-        plt.xlabel("Number of Tsunamis")
-        plt.ylabel("Country")
-        _savefig(FIG / "volcanic_top_countries_tsu.png")
+        _plot_top_counts(
+            s,
+            title="Volcanic: Top 10 Countries with Tsunami (tsu=1)",
+            xlabel="Number of Tsunamis",
+            outfile="volcanic_top_countries_tsu.png",
+            orient="h",
+            table_name="volcanic_top_countries_tsu.csv",
+        )
 
     # Vulkanik: mean VEI by country
     if {"country", "vei"}.issubset(df_v.columns):
-        mean_vei = df_v.groupby("country")["vei"].mean().sort_values(ascending=False).head(10)
-        _savetab(mean_vei.rename("mean_vei").reset_index(), TAB / "volcanic_mean_vei_by_country.csv")
-        plt.figure(figsize=(9, 4))
-        sns.barplot(x=mean_vei.values, y=mean_vei.index)
-        plt.title("Top 10 Average VEI per Country")
-        plt.xlabel("Average VEI")
-        _savefig(FIG / "volcanic_mean_vei_by_country.png")
+        mean_vei = df_v.groupby("country")["vei"].mean()
+        _plot_top_mean(
+            mean_vei,
+            title="Top 10 Average VEI per Country",
+            xlabel="Average VEI",
+            outfile="volcanic_mean_vei_by_country.png",
+            table_name="volcanic_mean_vei_by_country.csv",
+        )
 
 
 # ---------- MASTER RUN ----------
@@ -377,7 +430,6 @@ def run_full_eda(df: pd.DataFrame, ds_name: str, target: str = "tsu"):
 def main(datasets: list[str]):
     _ensure_dirs()
 
-    # baca processed
     dfs = {}
     for ds in datasets:
         df = _load_dataset(ds)
@@ -386,11 +438,9 @@ def main(datasets: list[str]):
         dfs[ds] = df
         print(f"[EDA] start {ds} -> rows={len(df)} cols={df.shape[1]}")
 
-    # EDA per dataset
     for ds, df in dfs.items():
         run_full_eda(df, ds, target="tsu")
 
-    # Plot kategori & negara lintas dataset
     if "tectonic" in dfs and "volcanic" in dfs:
         categorical_and_country_plots(dfs["tectonic"], dfs["volcanic"])
 
