@@ -383,10 +383,7 @@ def main():
     if sampling_strategy != "auto":
         try:
             s = sampling_strategy.strip()
-            if s.startswith("{"):
-                sampling_strategy = ast.literal_eval(s)
-            else:
-                sampling_strategy = float(s)
+            sampling_strategy = ast.literal_eval(s) if s.startswith("{") else float(s)
         except Exception:
             print("[WARN] sampling_strategy tidak valid, fallback ke 'auto'.")
             sampling_strategy = "auto"
