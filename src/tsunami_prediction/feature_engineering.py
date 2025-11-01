@@ -79,11 +79,11 @@ def _one_hot_encoder():
 # DOMAIN FEATURES
 # ====================================================
 _SUBDUCTION = {
-    "Indonesia","Japan","Philippines","Taiwan","Papua New Guinea","Solomon Islands",
-    "Vanuatu","Tonga","New Zealand","Fiji",
-    "United States","Canada","Mexico","Guatemala","El Salvador","Honduras","Nicaragua",
-    "Costa Rica","Panama","Colombia","Ecuador","Peru","Chile",
-    "Russia","Greece","Argentina","Bolivia",
+    "Indonesia", "Japan", "Philippines", "Taiwan", "Papua New Guinea", "Solomon Islands",
+    "Vanuatu", "Tonga", "New Zealand", "Fiji",
+    "United States", "Canada", "Mexico", "Guatemala", "El Salvador", "Honduras", "Nicaragua",
+    "Costa Rica", "Panama", "Colombia", "Ecuador", "Peru", "Chile",
+    "Russia", "Greece", "Argentina", "Bolivia",
 }
 _ALIASES = {
     "usa": "United States",
@@ -97,9 +97,11 @@ _ALIASES = {
 
 
 def _normalize_country(x: str) -> str:
+    """Normalisasi nama negara ke bentuk konsisten."""
     if pd.isna(x):
         return x
-    s = str(x).strip()
+    # x sudah bertipe str, jadi tidak perlu str(x)
+    s = x.strip()
     low = s.lower()
     return _ALIASES.get(low, s.title())
 
@@ -276,7 +278,8 @@ def engineer_volcanic(df: pd.DataFrame) -> Tuple[pd.DataFrame, List[str], List[s
 # ====================================================
 def do_ohe(df: pd.DataFrame, cat_cols: List[str]) -> Tuple[pd.DataFrame, OneHotEncoder, List[str]]:
     enc = _one_hot_encoder()
-    if len(cat_cols) == 0:
+    # ⚠️ peringatan “Simplify sequence length comparison” diperbaiki di sini
+    if not cat_cols:
         return df.copy(), enc, []
     arr = enc.fit_transform(df[cat_cols].astype("object"))
     ohe_cols = enc.get_feature_names_out(cat_cols).tolist()
