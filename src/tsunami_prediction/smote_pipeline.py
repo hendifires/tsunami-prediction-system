@@ -8,8 +8,12 @@ SMOTE pipeline (tectonic & volcanic) dengan anti-data-leakage:
 - Cleaning: ganti inf -> NaN, laporkan missing values.
 - Imputation (fit di train, transform ke test) + buang zero-variance.
 - SMOTE/SMOTETomek/SMOTEENN hanya di training set.
-- Simpan train.csv, test.csv, train_smote.csv + ringkasan & plot distribusi kelas.
-- Simpan artifacts (imputer, varselector, daftar fitur, config).
+- Simpan:
+    - {dataset}_train.csv, {dataset}_test.csv (umum, tanpa SMOTE)
+    - {dataset}_train_{var_tag}.csv (hasil resampling: smote | smote_tomek | smote_enn)
+    - reports/tables/{dataset}_{var_tag}_summary.csv
+    - reports/figures/{dataset}_{var_tag}_pie.png, ..._bar.png
+    - artifacts/{dataset}_{var_tag}_config.joblib
 """
 
 import argparse
@@ -124,7 +128,6 @@ def load_fe_dataset(dataset: str, auto_ohe: bool = True) -> Tuple[pd.DataFrame, 
             if c != target and (df[c].dtype == "object" or str(df[c].dtype) == "boolean")
         ]
 
-    # <- Perbaikan Sourcery (hindari len(cat_cols) == 0)
     if not cat_cols:
         return df, feat_cols
 
@@ -268,6 +271,23 @@ def plot_bar(before: Dict[int, int], after: Dict[int, int], title: str, out_png:
 
     _savefig(out_png)
 
+# ---------- Helpers ----------
+def _variant_tag(variant: str) -> str:
+    """
+    Nama suffix aman untuk file output per varian.
+    smote -> 'smote'
+    smote_tomek -> 'smote_tomek'
+    smoteenn -> 'smote_enn'
+    """
+    v = variant.lower()
+    if v == "smote":
+        return "smote"
+    if v == "smote_tomek":
+        return "smote_tomek"
+    if v == "smoteenn":
+        return "smote_enn"
+    raise ValueError("Unknown variant")
+
 # ---------- Main runner per dataset ----------
 def run_one(
     dataset: str,
@@ -279,18 +299,22 @@ def run_one(
     sampling_strategy,
     variant: str,
 ):
-    print(f"[SMOTE] Start -> {dataset}")
+    tag = _variant_tag(variant)
+    print(f"[SMOTE] Start -> {dataset} [{variant}]")
 
+    # Output paths (umum & per-varian)
     p_train = PROCESSED / f"{dataset}_train.csv"
     p_test  = PROCESSED / f"{dataset}_test.csv"
-    p_train_smote = PROCESSED / f"{dataset}_train_smote.csv"
-    p_sum   = TAB / f"{dataset}_smote_summary.csv"
-    p_pie   = FIG / f"{dataset}_smote_pie.png"
-    p_bar   = FIG / f"{dataset}_smote_bar.png"
-    p_cfg   = ART / f"{dataset}_smote_config.joblib"
 
-    if all(p.exists() for p in [p_train, p_test, p_train_smote]) and not overwrite:
-        print(f"[INFO] Reusing existing SMOTE outputs for '{dataset}' (use --overwrite untuk regenerasi).")
+    p_train_smote = PROCESSED / f"{dataset}_train_{tag}.csv"
+    p_sum   = TAB / f"{dataset}_{tag}_summary.csv"
+    p_pie   = FIG / f"{dataset}_{tag}_pie.png"
+    p_bar   = FIG / f"{dataset}_{tag}_bar.png"
+    p_cfg   = ART / f"{dataset}_{tag}_config.joblib"
+
+    # Jika semua output utama sudah ada dan tidak overwrite → reuse
+    if all(p.exists() for p in [p_train, p_test, p_train_smote, p_sum, p_pie, p_bar, p_cfg]) and not overwrite:
+        print(f"[INFO] Reusing existing outputs for '{dataset}' [{variant}] (use --overwrite untuk regenerasi).")
         return
 
     # 1) Load FE / FE_OHE
@@ -316,7 +340,7 @@ def run_one(
     )
     X_train_res, y_train_res = smote_obj.fit_resample(X_train, y_train)
 
-    # 6) Simpan dataset
+    # 6) Simpan dataset (umum & hasil resampling per varian)
     df_train = pd.concat([X_train.reset_index(drop=True), y_train.reset_index(drop=True)], axis=1)
     df_test  = pd.concat([X_test.reset_index(drop=True),  y_test.reset_index(drop=True)],  axis=1)
     df_train_res = pd.concat(
@@ -339,13 +363,14 @@ def run_one(
     })
     _savetab(summary, p_sum)
 
-    plot_pie(before, after, title=dataset.title(), out_png=p_pie)
-    plot_bar(before, after, title=dataset.title(), out_png=p_bar)
+    plot_pie(before, after, title=f"{dataset.title()} - {variant}", out_png=p_pie)
+    plot_bar(before, after, title=f"{dataset.title()} - {variant}", out_png=p_bar)
 
     # 8) Simpan config/artifacts
     dump(
         {
             "variant": variant,
+            "variant_tag": tag,
             "random_state": random_state,
             "k_neighbors_requested": k_neighbors,
             "k_neighbors_used": k_adj,
@@ -353,11 +378,21 @@ def run_one(
             "test_size": test_size,
             "feature_columns_before": feat_cols,
             "feature_columns_after_clean": kept_cols,
+            "y_train_before_counts": before,
+            "y_train_after_counts": after,
+            "outputs": {
+                "train": str(p_train),
+                "test": str(p_test),
+                "train_resampled": str(p_train_smote),
+                "summary_csv": str(p_sum),
+                "pie_png": str(p_pie),
+                "bar_png": str(p_bar),
+            },
         },
         p_cfg,
     )
 
-    print(f"[SMOTE] {dataset}: done | train={p_train.name}, test={p_test.name}, smote={p_train_smote.name}")
+    print(f"[SMOTE] {dataset} [{variant}]: done | train={p_train.name}, test={p_test.name}, smote={p_train_smote.name}")
 
 # ---------- CLI ----------
 def main():
