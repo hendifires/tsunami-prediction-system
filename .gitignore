@@ -1,5 +1,39 @@
+# -------- Virtual environments --------
 .venv/
+env/
+
+# -------- Python cache / build --------
+__pycache__/
+*.pyc
+.ipynb_checkpoints/
+build/
+dist/
+*.egg-info/
+
+# -------- Editors / OS junk --------
+.vscode/
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# -------- Logs --------
+*.log
+
+# -------- Models / Artifacts / Reports (generated) --------
+models/
+artifacts/
+reports/figures/
+reports/tables/
+
+# -------- Data (generated or big) --------
+data/processed/
+# Jika data raw besar, sebaiknya juga di-ignore:
+# data/raw/
+
+# -------- Binary/weights --------
+*.pkl
 *.save
+*.h5
 *.dll
 *.pyd
-*.h5
+*.exe

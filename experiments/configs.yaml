@@ -1,0 +1,22 @@
+seed: 42
+n_splits: 10
+target: tsu
+
+datasets:
+  tectonic:
+    csv: "data/processed/tectonic_latest.csv"
+    num_cols: [mag, depth, latitude, longitude, distance_to_coast_km, days_since_prev]
+    cat_cols: [country, type, is_subduction_zone]
+  volcanic:
+    csv: "data/processed/volcanic_latest.csv"
+    num_cols: [elevation, vei, latitude, longitude, distance_to_coast_km, days_since_prev]
+    cat_cols: [country, type, is_subduction_zone]
+
+experiments:
+  - name: baseline_no_smote
+    use_smote: false
+  - name: baseline_with_smote
+    use_smote: true
+
+threshold:
+  target_recall: 0.95
