@@ -1,9 +1,10 @@
 # src/tsunami_prediction/schemas.py
-
 from __future__ import annotations
+
+# cSpell:ignore vei
+
 from typing import List, Optional
 from pydantic import BaseModel, Field
-
 
 # --------- Tectonic ---------
 class TectonicItem(BaseModel):
@@ -19,11 +20,10 @@ class TectonicItem(BaseModel):
 class TectonicRequest(BaseModel):
     datas: List[TectonicItem]
 
-
 # --------- Volcanic ---------
 class VolcanicItem(BaseModel):
     country: Optional[str] = None
-    type: Optional[str] = Field(None, description="Volcano type (e.g., Stratovolcano/Caldera)")
+    type: Optional[str] = Field(None, description="Volcano type")
     latitude: float
     longitude: float
     eq: Optional[float] = 0.0
