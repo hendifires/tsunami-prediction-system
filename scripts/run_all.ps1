@@ -1,12 +1,6 @@
 <# -------------
 Run-all pipeline (Windows PowerShell)
 Steps: Preprocessing → EDA → FE(+coast) → SMOTE → Stacking → Experiments → CompareRuns → Tests → (opt) UI
-
-Contoh:
-  ./scripts/run_all.ps1
-  ./scripts/run_all.ps1 -UseSmote yes -CV 5 -StartUI
-  ./scripts/run_all.ps1 -CoastPath "data/coastline/ne_10m_coastline.shp" -Ablation
-  ./scripts/run_all.ps1 -Fast -FastN 4000 -FeatureSelect none
 ---------------- #>
 
 param(
@@ -26,25 +20,26 @@ param(
 
 $ErrorActionPreference = "Stop"
 
-function Run-Step([string]$title, [scriptblock]$block) {
-  Write-Host "`n=== $title ==="
+function Invoke-Step([string]$Title, [scriptblock]$Action) {
+  Write-Host "`n=== $Title ==="
   $t = Get-Date
-  & $block
+  & $Action
   $dt = (Get-Date) - $t
-  Write-Host "=== selesai: $title ($([int]$dt.TotalSeconds) sec)"
+  Write-Host "=== Completed: $Title ($([int]$dt.TotalSeconds) sec)"
 }
 
-function Has-Module([string]$mod) {
-  try { python - <<EOF
-import importlib, sys
-sys.exit(0 if importlib.util.find_spec("$mod") else 1)
-EOF
-    return $LASTEXITCODE -eq 0
-  } catch { return $false }
+# ✅ pakai approved verb 'Test'
+function Test-PyModule([string]$Name) {
+  try {
+    & python -c "import importlib, sys; sys.exit(0 if importlib.util.find_spec('$Name') else 1)"
+    return ($LASTEXITCODE -eq 0)
+  } catch {
+    return $false
+  }
 }
 
 # 0) venv
-Run-Step "0) Activate venv" {
+Invoke-Step "0) Activate venv" {
   if (Test-Path .\.venv\Scripts\Activate.ps1) {
     . .\.venv\Scripts\Activate.ps1
   } else {
@@ -53,24 +48,24 @@ Run-Step "0) Activate venv" {
 }
 
 # 1) Preprocessing (raw -> processed/*)
-Run-Step "1) Preprocessing (clean CSV)" {
+Invoke-Step "1) Preprocessing (clean CSV)" {
   python -m tsunami_prediction.preprocessing
 }
 
 # 2) EDA (gambar & tabel ringkas)
-Run-Step "2) EDA (figures & tables)" {
+Invoke-Step "2) EDA (figures & tables)" {
   python -m tsunami_prediction.eda
 }
 
 # 3) Feature Engineering (tambahkan distance-to-coast jika shapefile ada)
-Run-Step "3) Feature Engineering (+OHE, +coastline bila ada)" {
+Invoke-Step "3) Feature Engineering (+OHE, +coastline bila ada)" {
   $feArgs = @("--overwrite","--materialize-ohe")
   if (Test-Path $CoastPath) { $feArgs += @("--coast", $CoastPath) }
   python -m tsunami_prediction.feature_engineering @feArgs
 }
 
 # 4) SMOTE split (coba yang lengkap → fallback minimal)
-Run-Step "4) SMOTE splits" {
+Invoke-Step "4) SMOTE splits" {
   try {
     python -m tsunami_prediction.smote_pipeline --datasets @Datasets --all
   } catch {
@@ -80,7 +75,7 @@ Run-Step "4) SMOTE splits" {
 }
 
 # 5) Stacking (train + threshold tuning)
-Run-Step "5) Stacking (train + threshold tuning)" {
+Invoke-Step "5) Stacking (train + threshold tuning)" {
   $stackArgs = @(
     "--datasets") + $Datasets + @(
     "--cv",$CV,
@@ -97,7 +92,7 @@ Run-Step "5) Stacking (train + threshold tuning)" {
 }
 
 # 6) Experiments (configs.yaml)
-Run-Step "6) Experiments (configs.yaml)" {
+Invoke-Step "6) Experiments (configs.yaml)" {
   if (Test-Path "experiments\configs.yaml") {
     python experiments/run_experiment.py --config experiments/configs.yaml
   } else {
@@ -106,14 +101,14 @@ Run-Step "6) Experiments (configs.yaml)" {
 }
 
 # 7) Compare runs (opsional; jika script ada)
-Run-Step "7) Compare runs (optional)" {
+Invoke-Step "7) Compare runs (optional)" {
   try { python -m tsunami_prediction.compare_runs } catch { Write-Host "skip compare_runs." }
 }
 
 # 8) Tests (opsional, butuh pytest)
 if ($RunTests) {
-  Run-Step "8) Unit tests (pytest)" {
-    if (Has-Module "pytest") {
+  Invoke-Step "8) Unit tests (pytest)" {
+    if (Test-PyModule "pytest") {
       python -m pytest -q tests/tests_pipeline.py
     } else {
       Write-Warning "pytest belum terpasang; lewati tests."
@@ -124,7 +119,7 @@ if ($RunTests) {
 }
 
 # 9) Interface (opsional)
-Run-Step "9) Interface (UI)" {
+Invoke-Step "9) Interface (UI)" {
   if ($StartUI) {
     if (Test-Path "interface\app.py") {
       python interface/app.py
