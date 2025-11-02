@@ -64,14 +64,11 @@ Invoke-Step "3) Feature Engineering (+OHE, +coastline bila ada)" {
   python -m tsunami_prediction.feature_engineering @feArgs
 }
 
-# 4) SMOTE split (coba yang lengkap → fallback minimal)
-Invoke-Step "4) SMOTE splits" {
-  try {
-    python -m tsunami_prediction.smote_pipeline --datasets @Datasets --all
-  } catch {
-    Write-Warning "smote_pipeline --all gagal/tdk tersedia; fallback tanpa argumen…"
-    python -m tsunami_prediction.smote_pipeline
-  }
+# 4) SMOTE splits
+Invoke-Task "4) SMOTE splits" {
+  $Datasets = @("tectonic","volcanic")   # pastikan ada variabel ini di atas
+  $smArgs = @("--datasets") + $Datasets + @("--overwrite")
+  python -m tsunami_prediction.smote_pipeline @smArgs
 }
 
 # 5) Stacking (train + threshold tuning)

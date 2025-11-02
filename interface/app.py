@@ -22,7 +22,7 @@ app = FastAPI(
     docs_url="/docs",
 )
 
-# --- CORS (dev) ---
+# ── CORS (dev) ────────────────────────────────────────────────────────────────
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*", "http://localhost", "http://127.0.0.1:3000"],
@@ -31,10 +31,10 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# --- Static landing (index.html optional) ---
-STATIC_DIR = os.path.join(os.path.dirname(__file__), "static")
-if os.path.isdir(STATIC_DIR):
-    app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
+# ── Static landing (index.html opsional) ──────────────────────────────────────
+STATIC_DIR = Path(__file__).resolve().parent / "static"
+if STATIC_DIR.is_dir():
+    app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 
 
 @app.get("/healthz", tags=["Health"])
@@ -43,14 +43,11 @@ def healthz():
 
 
 @app.get("/", response_class=HTMLResponse, tags=["Landing"])
-async def main():
-    """
-    Serve interface/static/index.html kalau ada.
-    """
-    index_html = os.path.join(STATIC_DIR, "index.html")
-    if os.path.exists(index_html):
-        with open(index_html, "r", encoding="utf-8") as f:
-            return HTMLResponse(content=f.read(), status_code=200)
+async def root():
+    """Render interface/static/index.html bila ada; fallback teks sederhana."""
+    index_html = STATIC_DIR / "index.html"
+    if index_html.exists():
+        return HTMLResponse(content=index_html.read_text(encoding="utf-8"), status_code=200)
     return HTMLResponse("<h1>Tsunami Prediction API</h1><p>Service is running.</p>", status_code=200)
 
 
@@ -145,6 +142,11 @@ def predict_volcanic(req: VolcanicRequest):
 
 
 if __name__ == "__main__":
-    # 0.0.0.0 = listen all interfaces; bukanya di browser pakai http://127.0.0.1:8000
+    # Jalankan langsung: python interface/app.py
+    # Catatan: reload=True butuh import-string ("interface.app:app").
+    # Di sini pakai object langsung agar tidak perlu paket 'interface'.
     import uvicorn
-    uvicorn.run("interface.app:app", host="0.0.0.0", port=8000, reload=True)
+
+    host = os.getenv("HOST", "127.0.0.1")
+    port = int(os.getenv("PORT", "8000"))
+    uvicorn.run(app, host=host, port=port, reload=False)
