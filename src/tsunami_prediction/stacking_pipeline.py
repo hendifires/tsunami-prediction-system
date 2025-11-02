@@ -1,4 +1,5 @@
 from __future__ import annotations
+# cSpell:ignore nosmote smoteenn tomek writeable joblib OOF
 
 """
 Stacking Ensemble Pipeline + SMOTE Ablation (fast & robust)
@@ -11,6 +12,7 @@ Stacking Ensemble Pipeline + SMOTE Ablation (fast & robust)
 Tambahan:
 - Kolom waktu: fit_sec (per model & stacking), grid_sec (waktu meta-grid), run_sec (durasi total run_one)
 - Simpan confusion matrix sebagai gambar (reports/figures) dan tabel CSV (reports/tables)
+- Cari decision_threshold optimal (F-beta) via OOF CV, disimpan ke artifact (dipakai serve_api).
 """
 
 import argparse
@@ -42,7 +44,7 @@ from sklearn.ensemble import (
     GradientBoostingClassifier,
     StackingClassifier,
 )
-from sklearn.model_selection import GridSearchCV
+from sklearn.model_selection import GridSearchCV, cross_val_predict
 from sklearn.metrics import (
     accuracy_score, precision_score, recall_score, f1_score,
     roc_auc_score, average_precision_score, confusion_matrix,
@@ -285,8 +287,63 @@ def build_stacking(base_learners: List[Tuple[str, object]], cv: int) -> Stacking
         cv=cv,
         passthrough=True,
         stack_method="predict_proba",
-        n_jobs=1,  # penting agar stabil saat CV/grid
+        n_jobs=1,
     )
+
+# ---------------- Threshold tuning ----------------
+def _f_beta(y_true: np.ndarray, y_prob: np.ndarray, thr: float, beta: float) -> Tuple[float, float, float]:
+    y_pred = (y_prob >= thr).astype(int)
+    prec = precision_score(y_true, y_pred, zero_division=0)
+    rec = recall_score(y_true, y_pred, zero_division=0)
+    if prec == 0 and rec == 0:
+        return 0.0, prec, rec
+    b2 = beta ** 2
+    fbeta = (1 + b2) * (prec * rec) / (b2 * prec + rec) if (b2 * prec + rec) > 0 else 0.0
+    return fbeta, prec, rec
+
+def _plot_thr_sweep(df: pd.DataFrame, thr: float, title: str, out_png: Path) -> None:
+    plt.figure(figsize=(6.4, 4.2))
+    plt.plot(df["threshold"], df["f_beta"], label="F-beta")
+    plt.plot(df["threshold"], df["precision"], label="Precision")
+    plt.plot(df["threshold"], df["recall"], label="Recall")
+    plt.axvline(thr, linestyle="--")
+    plt.title(title or "Threshold sweep")
+    plt.xlabel("Threshold"); plt.ylabel("Score")
+    plt.legend()
+    _savefig(out_png)
+
+def find_best_threshold(
+    y_true: np.ndarray,
+    y_prob: np.ndarray,
+    beta: float = 1.0,
+    min_precision: Optional[float] = None,
+    title: str = "",
+    out_csv: Optional[Path] = None,
+    out_png: Optional[Path] = None,
+) -> float:
+    """Sweep threshold & pilih yang memaksimalkan F-beta (opsional: syarat min precision)."""
+    grid = np.linspace(0.01, 0.99, 99)
+    rows = []
+    for t in grid:
+        f, p, r = _f_beta(y_true, y_prob, t, beta)
+        rows.append((t, f, p, r))
+    df = pd.DataFrame(rows, columns=["threshold", "f_beta", "precision", "recall"])
+
+    if min_precision is None:
+        best = df.loc[df["f_beta"].idxmax()]
+    else:
+        cand = df[df["precision"] >= float(min_precision)]
+        if cand.empty:
+            best = df.loc[df["f_beta"].idxmax()]
+        else:
+            best = cand.loc[cand["f_beta"].idxmax()]
+
+    thr = float(best["threshold"])
+    if out_csv is not None:
+        _savetab(df, out_csv)
+    if out_png is not None:
+        _plot_thr_sweep(df, thr, title, out_png)
+    return thr
 
 # ---------------- Plots ----------------
 def plot_confusion(y_true: np.ndarray, y_pred: np.ndarray, title: str, out_png: Path) -> None:
@@ -313,7 +370,7 @@ def fit_and_eval_single(name: str, clf, Xtr, ytr, Xte, yte) -> Dict[str, float]:
     model = clone(clf); model.fit(Xtr, ytr)
     pred = model.predict(Xte); prob = _safe_proba(model, Xte)
     m = _metrics(yte, pred, prob); m["model"] = name
-    m["fit_sec"] = round(time.time() - t0, 3)  # waktu training per-model
+    m["fit_sec"] = round(time.time() - t0, 3)
     _log(f"[Stack]   > Done {name} in {m['fit_sec']:.2f}s | f1={m['f1']:.3f} rec={m['recall']:.3f}")
     return m
 
@@ -332,6 +389,8 @@ def run_one(
     p_cm_tab  = TAB / f"{dataset}_stack_{suffix}_cm.csv"
     p_roc     = FIG / f"{dataset}_stack_{suffix}_roc.png"
     p_pr      = FIG / f"{dataset}_stack_{suffix}_pr.png"
+    p_thr_csv = TAB / f"{dataset}_stack_{suffix}_thr_sweep.csv"
+    p_thr_png = FIG / f"{dataset}_stack_{suffix}_thr_sweep.png"
     p_model   = ART / f"{dataset}_stack_{suffix}.joblib"
 
     Xtr, Xte, ytr, yte = load_split(dataset, use_smote=use_smote, smote_variant=smote_variant)
@@ -358,7 +417,6 @@ def run_one(
             "final_estimator__solver": ["lbfgs", "liblinear"],
         }
         t_grid = time.time()
-        # n_jobs=1 untuk menghindari memmap read-only saat CV
         grid = GridSearchCV(stack, param_grid=param_grid, scoring="roc_auc", cv=cv, n_jobs=1, verbose=1)
         grid.fit(Xtr, ytr)
         grid_sec = round(time.time() - t_grid, 3)
@@ -369,16 +427,38 @@ def run_one(
     # --- Base learners (waktu per-model ikut ke metrics.csv) ---
     rows = [fit_and_eval_single(name, est, Xtr, ytr, Xte, yte) for name, est in base_learners]
 
-    # --- Stacking ---
+    # --- Stacking: fit, proba test, threshold tuning (OOF) ---
     _log("[Stack]   > Fit Stacking …")
     t0 = time.time()
     stack.fit(Xtr, ytr)
-    y_pred = stack.predict(Xte); y_prob = _safe_proba(stack, Xte)
-    m_stack = _metrics(yte, y_pred, y_prob); m_stack["model"] = "stacking_lr_meta"
-    m_stack["fit_sec"] = round(time.time() - t0, 3)     # waktu training Stacking
-    m_stack["grid_sec"] = grid_sec                      # waktu grid (bila ada)
+    # Prob test
+    y_prob_test = _safe_proba(stack, Xte)
+    # OOF prob untuk cari threshold (lebih aman dari pada pakai test)
+    _log("[Stack]   > Cross-val predict for threshold …")
+    with suppress(Exception):
+        oof = cross_val_predict(stack, Xtr, ytr, method="predict_proba", cv=cv)
+        y_prob_oof = oof[:, 1] if oof.ndim == 2 else oof
+    if "y_prob_oof" not in locals():
+        _log("[WARN] cross_val_predict failed; fallback: in-sample prob for threshold")
+        y_prob_oof = _safe_proba(stack, Xtr)
+
+    # Dataset-specific preference: volcanic lebih pro-recall
+    beta = 2.0 if dataset.lower() == "volcanic" else 1.0
+    min_prec = 0.50 if dataset.lower() == "volcanic" else None
+    thr = find_best_threshold(
+        ytr.to_numpy(), y_prob_oof, beta=beta, min_precision=min_prec,
+        title=f"{dataset.title()} ({suffix}) Threshold sweep (beta={beta})",
+        out_csv=p_thr_csv, out_png=p_thr_png,
+    )
+    _log(f"[Stack]   > Best threshold = {thr:.3f} (beta={beta}, min_precision={min_prec})")
+
+    # Prediksi test memakai threshold terbaik
+    y_pred = (y_prob_test >= thr).astype(int)
+    m_stack = _metrics(yte.to_numpy(), y_pred, y_prob_test); m_stack["model"] = "stacking_lr_meta"
+    m_stack["fit_sec"] = round(time.time() - t0, 3)
+    m_stack["grid_sec"] = grid_sec
     rows.append(m_stack)
-    _log(f"[Stack]   > Done Stacking in {m_stack['fit_sec']:.2f}s | f1={m_stack['f1']:.3f}")
+    _log(f"[Stack]   > Done Stacking in {m_stack['fit_sec']:.2f}s | f1={m_stack['f1']:.3f} rec={m_stack['recall']:.3f}")
 
     # --- Tabel metrics lengkap (+fit_sec) ---
     metrics_df = pd.DataFrame(rows)
@@ -387,7 +467,7 @@ def run_one(
     _savetab(metrics_df, p_metrics)
 
     # --- Simpan preds ---
-    preds_df = pd.DataFrame({"y_true": yte, "y_pred": y_pred, "y_prob": y_prob})
+    preds_df = pd.DataFrame({"y_true": yte, "y_pred": y_pred, "y_prob": y_prob_test})
     _savetab(preds_df, p_preds)
 
     # --- Confusion matrix: gambar + tabel CSV ---
@@ -396,12 +476,12 @@ def run_one(
     cm_df = pd.DataFrame(cm, index=["True 0", "True 1"], columns=["Pred 0", "Pred 1"])
     _savetab(cm_df, p_cm_tab)
 
-    # --- ROC & PR curve (jika proba tersedia) ---
+    # --- ROC & PR curve (berdasarkan prob test) ---
     with suppress(Exception):
-        plot_roc(yte.to_numpy(), y_prob, f"{dataset.title()} - ROC ({suffix})", p_roc)
-        plot_pr(yte.to_numpy(), y_prob, f"{dataset.title()} - PR ({suffix})", p_pr)
+        plot_roc(yte.to_numpy(), y_prob_test, f"{dataset.title()} - ROC ({suffix})", p_roc)
+        plot_pr(yte.to_numpy(), y_prob_test, f"{dataset.title()} - PR ({suffix})", p_pr)
 
-    # --- Simpan artifact model + metadata waktu ---
+    # --- Simpan artifact model + metadata waktu + threshold ---
     run_sec = round(time.time() - start_run, 3)
     dump({
         "model": stack,
@@ -410,9 +490,11 @@ def run_one(
         "feature_select": feature_select,
         "col_name_map": name_map,
         "sanitized_feature_names": True,
+        "decision_threshold": float(thr),
         "runtime": {"stack_fit_sec": m_stack["fit_sec"], "grid_sec": grid_sec, "run_sec": run_sec},
         "meta": {"dataset": dataset, "use_smote": use_smote, "smote_variant": smote_variant,
-                 "cv": cv, "random_state": random_state, "best_meta": best_meta}
+                 "cv": cv, "random_state": random_state, "best_meta": best_meta,
+                 "beta": beta, "min_precision": min_prec},
     }, p_model, compress=3)
 
     # --- Nilai untuk ablation_smote.csv (ringkas) ---
@@ -423,7 +505,8 @@ def run_one(
         "accuracy": m_stack["accuracy"], "precision": m_stack["precision"],
         "recall": m_stack["recall"], "f1": m_stack["f1"],
         "roc_auc": m_stack["roc_auc"], "pr_auc": m_stack["pr_auc"], "fn": m_stack["fn"],
-        "stack_fit_sec": m_stack["fit_sec"], "grid_sec": grid_sec, "run_sec": run_sec
+        "stack_fit_sec": m_stack["fit_sec"], "grid_sec": grid_sec, "run_sec": run_sec,
+        "thr": float(thr), "beta": beta,
     }
 
 # ---------------- CLI ----------------

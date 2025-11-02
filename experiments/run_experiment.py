@@ -1,176 +1,151 @@
+# experiments/run_experiment.py
 from __future__ import annotations
-import numpy as np
-import pandas as pd
+# cSpell:ignore yaml ohe
+
+"""
+Runner serbaguna untuk eksperimen:
+- FE (feature_engineering)  -> tambah distance_to_coast_km (opsional) + OHE diagnostics
+- SMOTE (smote_pipeline)    -> buat ulang split train/test + varian SMOTE
+- STACK (stacking_pipeline) -> train Stacking + simpan threshold & artefak
+
+Konfigurasi dibaca dari experiments/configs.yaml
+"""
+
+import os
+import sys
+import subprocess
 from pathlib import Path
-from sklearn.model_selection import StratifiedKFold, train_test_split
-from sklearn.base import clone
+from typing import Dict, List, Any
 
-from tsunami_prediction.utils import load_csv_smart, ensure_dirs, FIG, TAB, MODELS, ART
-from tsunami_prediction.eda import run_full_eda
-from tsunami_prediction.preprocessing import add_engineered_features, build_preprocessor
-from tsunami_prediction.base_models import get_base_estimators
-from tsunami_prediction.stacking_pipeline import build_single_pipeline, build_stacking_pipeline
-from tsunami_prediction.plotting import plot_roc, plot_pr, plot_cm, plot_reliability, bar_delta
-from tsunami_prediction.evaluation import metrics_from_preds, mean_sd, paired_test
+try:
+    import yaml  # type: ignore
+except Exception as e:
+    raise SystemExit(
+        "PyYAML belum terpasang. Install dulu: pip install pyyaml"
+    ) from e
 
-RANDOM_STATE = 42
-TARGET = "tsu"
-KFOLDS = 10
+ROOT = Path(__file__).resolve().parents[1]  # repo root
 
-def load_dataset(name: str) -> pd.DataFrame:
-    """Kini otomatis fallback ke data/raw bila processed belum ada."""
-    return load_csv_smart(name)
 
-def main():
-    ensure_dirs()
-    for ds in ["tectonic", "volcanic"]:
-        print(f"\n=== Dataset: {ds} ===")
-        df = load_dataset(ds)
+# ---------- Utilities ----------
+def _log(msg: str) -> None:
+    print(msg, flush=True)
 
-def eda_stage(df: pd.DataFrame, ds_name: str):
-    run_full_eda(df, ds_name, target=TARGET)
 
-def prepare_Xy(df: pd.DataFrame):
-    df = add_engineered_features(df)
-    num_cols, cat_cols = detect_columns(df, target=TARGET)
-    X = df[num_cols + cat_cols]
-    y = df[TARGET].astype(int).values
-    pre = build_preprocessor(num_cols, cat_cols)
-    return X, y, pre, num_cols, cat_cols
+def run_cmd(cmd: List[str]) -> None:
+    """Jalankan proses child, tampilkan log real-time, dan fail jika exit!=0."""
+    _log(f"[RUN] {' '.join(cmd)}")
+    env = os.environ.copy()
+    env["PYTHONUNBUFFERED"] = "1"
+    subprocess.run(cmd, cwd=str(ROOT), env=env, check=True)
 
-def evaluate_models_cv(X, y, pre, estimators: dict, use_smote: bool, ds_name: str):
-    """CV identik untuk NoSMOTE & SMOTE (pairing). Return: per-fold results, and per-model holdout metrics via a final split."""
-    skf = StratifiedKFold(n_splits=KFOLDS, shuffle=True, random_state=RANDOM_STATE)
-    records = []
 
-    for model_name, est in estimators.items():
-        for fold, (tr, va) in enumerate(skf.split(X, y), 1):
-            Xtr, Xva = X.iloc[tr], X.iloc[va]
-            ytr, yva = y[tr], y[va]
-            pipe = build_single_pipeline(pre, clone(est), use_smote=use_smote)
-            pipe.fit(Xtr, ytr)
-            proba = pipe.predict_proba(Xva)[:, 1]
-            yhat = (proba >= 0.5).astype(int)  # evaluasi default @0.5
-            m = metrics_from_preds(yva, proba, yhat)
-            m.update(dict(model=model_name, fold=fold, smote=use_smote, dataset=ds_name))
-            records.append(m)
+def _str_bool(x: Any) -> bool:
+    if isinstance(x, bool):
+        return x
+    if x is None:
+        return False
+    s = str(x).strip().lower()
+    return s in {"1", "true", "yes", "y", "on"}
 
-    # Stacking (pakai pipeline yang sama untuk anti-leakage)
-    stack_pipe = build_stacking_pipeline(pre, estimators, use_smote=use_smote)
-    for fold, (tr, va) in enumerate(skf.split(X, y), 1):
-        Xtr, Xva = X.iloc[tr], X.iloc[va]
-        ytr, yva = y[tr], y[va]
-        sp = clone(stack_pipe)
-        sp.fit(Xtr, ytr)
-        proba = sp.predict_proba(Xva)[:, 1]
-        # pilih τ* dari validasi fold (target recall tinggi)
-        tau_star, _ = choose_tau_for_recall(yva, proba, target_recall=0.95)
-        yhat = (proba >= tau_star).astype(int)
-        m = metrics_from_preds(yva, proba, yhat)
-        m.update(dict(model="stacking", fold=fold, smote=use_smote, dataset=ds_name, tau_star=tau_star))
-        records.append(m)
 
-    return pd.DataFrame.from_records(records)
+def load_cfg(path: Path) -> Dict[str, Any]:
+    with path.open("r", encoding="utf-8") as f:
+        return yaml.safe_load(f) or {}
 
-def holdout_evaluation_and_save(X, y, pre, estimators: dict, use_smote: bool, ds_name: str):
-    """Split holdout untuk gambar final & simpan model/artefak untuk UI/deployment."""
-    Xtr, Xte, ytr, yte = train_test_split(X, y, test_size=0.2, stratify=y, random_state=RANDOM_STATE)
 
-    # Simpan base (opsional)
-    base_pipe = {name: build_single_pipeline(pre, est, use_smote) for name, est in estimators.items()}
-    for name, p in base_pipe.items():
-        p.fit(Xtr, ytr)
+# ---------- Command builders ----------
+def build_fe_cmd(cfg: Dict[str, Any]) -> List[str]:
+    fe = cfg.get("fe", {})
+    coast = (cfg.get("paths", {}) or {}).get("coastline") or fe.get("coastline")
+    cmd = [
+        sys.executable, "-m", "tsunami_prediction.feature_engineering",
+        "--overwrite" if _str_bool(fe.get("overwrite", True)) else "",
+        "--materialize-ohe" if _str_bool(fe.get("materialize_ohe", True)) else "",
+    ]
+    cmd = [c for c in cmd if c]  # buang string kosong
+    if coast:
+        cmd += ["--coast", str(coast)]
+    return cmd
 
-    # Stacking
-    sp = build_stacking_pipeline(pre, estimators, use_smote)
-    sp.fit(Xtr, ytr)
-    proba = sp.predict_proba(Xte)[:, 1]
-    tau_star, _ = choose_tau_for_recall(yte, proba, target_recall=0.95)
-    yhat = (proba >= tau_star).astype(int)
 
-    # Plots
-    suffix = f"{ds_name}_{'smote' if use_smote else 'nosmote'}"
-    plot_roc(yte, proba, FIG / f"{suffix}_roc.png", f"ROC — {suffix}")
-    plot_pr(yte, proba, FIG / f"{suffix}_pr.png", f"PR — {suffix}")
-    plot_cm(yte, yhat, FIG / f"{suffix}_cm.png", f"CM — {suffix}")
-    plot_reliability(yte, proba, FIG / f"{suffix}_reliability.png", f"Reliability — {suffix}")
+def build_smote_cmd(cfg: Dict[str, Any]) -> List[str]:
+    sm = cfg.get("smote", {})
+    cmd = [
+        sys.executable, "-m", "tsunami_prediction.smote_pipeline",
+        "--overwrite" if _str_bool(sm.get("overwrite", True)) else "",
+    ]
+    return [c for c in cmd if c]
 
-    # Simpan model & spec
-    save_joblib(base_pipe, MODELS / f"base_{suffix}.joblib")
-    save_joblib(sp, MODELS / f"stack_meta_{suffix}.joblib")
-    # simpan spec kolom + tau*
-    num_cols = pre.transformers_[0][2]  # dari ColumnTransformer
-    cat_cols = pre.transformers_[1][2]
-    spec = {"num_cols": list(num_cols), "cat_cols": list(cat_cols), "tau_star": float(tau_star)}
-    save_joblib(spec, ART / f"feature_spec_{suffix}.joblib")
 
-    # Tabel metrik holdout stacking
-    m = metrics_from_preds(yte, proba, yhat)
-    m.update(dict(model="stacking", dataset=ds_name, smote=use_smote, tau_star=tau_star))
-    pd.DataFrame([m]).to_csv(TAB / f"holdout_{suffix}.csv", index=False)
+def build_stack_cmds(cfg: Dict[str, Any]) -> List[List[str]]:
+    st = cfg.get("stack", {})
+    datasets = cfg.get("datasets", ["tectonic", "volcanic"])
 
-def smote_ablation(stats_nosmote: pd.DataFrame, stats_smote: pd.DataFrame, ds_name: str):
-    """Bandingkan SMOTE vs NoSMOTE untuk Stacking dan RF (primer)."""
-    # Ambil per-fold untuk model 'stacking' dan 'rf'
-    def pick(df, model):
-        return df.query("model == @model")[["fold", "recall", "f1", "ap", "roc_auc"]].sort_values("fold")
+    base_cmd = [
+        sys.executable, "-m", "tsunami_prediction.stacking_pipeline",
+        "--cv", str(st.get("cv", 3)),
+        "--top-n", str(st.get("top_n", 30)),
+        "--feature-select", str(st.get("feature_select", "none")),
+    ]
 
-    rows = []
-    for model in ["stacking", "rf"]:
-        a = pick(stats_nosmote, model).reset_index(drop=True)
-        b = pick(stats_smote, model).reset_index(drop=True)
-        for metric in ["recall", "f1", "ap", "roc_auc"]:
-            delta = (b[metric] - a[metric]).values  # SMOTE − NoSMOTE
-            test = paired_test(delta, alternative="greater")
-            rows.append({
-                "dataset": ds_name,
-                "model": model,
-                "metric": metric,
-                "delta_mean": float(np.mean(delta)),
-                "delta_sd": float(np.std(delta, ddof=1)),
-                "p_value": test["p_value"],
-                "effect": test["effect"],
-                "normal": test["normal"],
-                "method": test["method"]
-            })
-            # plot bar kecil utk delta rata2
-            bar_delta({metric: float(np.mean(delta))}, FIG / f"delta_{ds_name}_{model}_{metric}.png",
-                      f"Δ (SMOTE − NoSMOTE) — {ds_name} / {model} / {metric}")
-    out = pd.DataFrame(rows)
-    out.to_csv(TAB / f"smote_ablation_{ds_name}.csv", index=False)
+    # toggles
+    base_cmd += ["--with-xgb"] if _str_bool(st.get("with_xgb", True)) else ["--no-xgb"]
+    base_cmd += ["--meta-grid"] if _str_bool(st.get("meta_grid", True)) else ["--no-meta-grid"]
+    if _str_bool(st.get("with_mlp", False)):
+        base_cmd += ["--with-mlp"]
+    if _str_bool(st.get("fast", False)):
+        base_cmd += ["--fast", "--fast-n", str(st.get("fast_n", 5000))]
 
-def run_for_dataset(ds_name: str):
-    print(f"\n=== Dataset: {ds_name} ===")
-    df = load_dataset(ds_name)
-    eda_stage(df, ds_name)
+    use_smote = str(st.get("use_smote", "auto")).lower()
+    base_cmd += ["--use-smote", use_smote]
 
-    X, y, pre, _, _ = prepare_Xy(df)
-    estimators = get_base_estimators(RANDOM_STATE)
+    ablation = _str_bool(st.get("ablation", False))
 
-    # CV NoSMOTE & SMOTE (pairing sama karena random_state sama di StratifiedKFold)
-    cv_no = evaluate_models_cv(X, y, pre, estimators, use_smote=False, ds_name=ds_name)
-    cv_sm = evaluate_models_cv(X, y, pre, estimators, use_smote=True, ds_name=ds_name)
+    cmds: List[List[str]] = []
+    for ds in datasets:
+        # ← inilah perbaikan yang menghapus warning:
+        cmd = base_cmd + ["--datasets", ds] + (["--ablation"] if ablation else [])
+        cmds.append(cmd)
+    return cmds
 
-    # Simpan tabel per-fold & ringkasan
-    cv_no.to_csv(TAB / f"cv_{ds_name}_nosmote.csv", index=False)
-    cv_sm.to_csv(TAB / f"cv_{ds_name}_smote.csv", index=False)
 
-    metr_cols = ["accuracy","precision","recall","f1","roc_auc","ap","brier"]
-    summary_no = mean_sd(cv_no, by_cols=["dataset","model","smote"], metric_cols=metr_cols)
-    summary_sm = mean_sd(cv_sm, by_cols=["dataset","model","smote"], metric_cols=metr_cols)
-    summary = pd.concat([summary_no, summary_sm]).reset_index(drop=True)
-    summary.to_csv(TAB / f"summary_{ds_name}.csv", index=False)
+# ---------- Main ----------
+def main() -> None:
+    cfg_path = ROOT / "experiments" / "configs.yaml"
+    if not cfg_path.exists():
+        raise SystemExit(f"Config tidak ditemukan: {cfg_path}")
 
-    # Holdout test & simpan model/artefak untuk UI
-    holdout_evaluation_and_save(X, y, pre, estimators, use_smote=False, ds_name=ds_name)
-    holdout_evaluation_and_save(X, y, pre, estimators, use_smote=True, ds_name=ds_name)
+    cfg = load_cfg(cfg_path)
 
-    # SMOTE ablation (paired test)
-    smote_ablation(cv_no, cv_sm, ds_name)
+    steps = cfg.get("steps", {})
+    do_fe = _str_bool(steps.get("fe", True))
+    do_sm = _str_bool(steps.get("smote", True))
+    do_st = _str_bool(steps.get("stack", True))
 
-def main():
-    for ds in ["tectonic", "volcanic"]:
-        run_for_dataset(ds)
+    _log("[Runner] Mulai eksperimen…")
+
+    if do_fe:
+        _log("[Runner] 1) Feature Engineering")
+        run_cmd(build_fe_cmd(cfg))
+    else:
+        _log("[Runner] 1) Feature Engineering — dilewati")
+
+    if do_sm:
+        _log("[Runner] 2) SMOTE pipeline")
+        run_cmd(build_smote_cmd(cfg))
+    else:
+        _log("[Runner] 2) SMOTE pipeline — dilewati")
+
+    if do_st:
+        _log("[Runner] 3) Stacking pipeline")
+        for cmd in build_stack_cmds(cfg):
+            run_cmd(cmd)
+    else:
+        _log("[Runner] 3) Stacking pipeline — dilewati")
+
+    _log("[Runner] Selesai ✅")
+
 
 if __name__ == "__main__":
     main()

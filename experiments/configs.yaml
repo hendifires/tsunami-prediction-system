@@ -1,22 +1,37 @@
-seed: 42
-n_splits: 10
-target: tsu
+# Experiments matrix for stacking_pipeline
 
-datasets:
-  tectonic:
-    csv: "data/processed/tectonic_latest.csv"
-    num_cols: [mag, depth, latitude, longitude, distance_to_coast_km, days_since_prev]
-    cat_cols: [country, type, is_subduction_zone]
-  volcanic:
-    csv: "data/processed/volcanic_latest.csv"
-    num_cols: [elevation, vei, latitude, longitude, distance_to_coast_km, days_since_prev]
-    cat_cols: [country, type, is_subduction_zone]
+global:
+  cv: 3
+  random_state: 42
+  with_xgb: true
+  with_mlp: false
+  feature_select: "none"   # none | pearson | rfe
+  top_n: 30
+  meta_grid: true
+  fast: false              # true untuk debug cepat
+  fast_n: 5000
+  collect_outputs: true    # salin keluaran ke folder run
 
-experiments:
-  - name: baseline_no_smote
-    use_smote: false
-  - name: baseline_with_smote
-    use_smote: true
+# Opsional: jalankan tiap run dengan multi-seed (akan override global.random_state)
+seeds: [42]
 
-threshold:
-  target_recall: 0.95
+runs:
+  - name: auto_best
+    datasets: ["tectonic", "volcanic"]
+    use_smote: "auto"     # auto|yes|no
+    ablation: false
+
+  - name: ablation_full
+    datasets: ["tectonic", "volcanic"]
+    ablation: true        # akan jalankan nosmote + smote + smote_tomek + smote_enn
+
+  # Contoh run spesifik
+  - name: volcanic_nosmote_only
+    datasets: ["volcanic"]
+    use_smote: "no"
+    ablation: false
+
+  - name: volcanic_smote_only
+    datasets: ["volcanic"]
+    use_smote: "yes"
+    ablation: false
