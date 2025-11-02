@@ -7,6 +7,10 @@ Stacking Ensemble Pipeline + SMOTE Ablation (fast & robust)
 - Metrics: Accuracy, Precision, Recall, F1, ROC-AUC, PR-AUC, FN.
 - Outputs per run: metrics.csv, preds.csv, CM/ROC/PR figures, model.joblib
 - Aggregated ablation: reports/tables/ablation_smote.csv
+
+Tambahan:
+- Kolom waktu: fit_sec (per model & stacking), grid_sec (waktu meta-grid), run_sec (durasi total run_one)
+- Simpan confusion matrix sebagai gambar (reports/figures) dan tabel CSV (reports/tables)
 """
 
 import argparse
@@ -112,7 +116,6 @@ def _metrics(y_true: np.ndarray, y_pred: np.ndarray, y_prob: Optional[np.ndarray
 
 # -------- Sanitize feature names for XGBoost & Stacking --------
 _BAD_CHARS = {"[": "(", "]": ")", "<": "_lt_", ">": "_gt_", "{": "(", "}": ")", "/": "_", "\\": "_", ":": "_", ";": "_", ",": "_", "=": "_"}
-
 def _safe_name(name: object) -> str:
     s = str(name)
     for k, v in _BAD_CHARS.items():
@@ -310,7 +313,8 @@ def fit_and_eval_single(name: str, clf, Xtr, ytr, Xte, yte) -> Dict[str, float]:
     model = clone(clf); model.fit(Xtr, ytr)
     pred = model.predict(Xte); prob = _safe_proba(model, Xte)
     m = _metrics(yte, pred, prob); m["model"] = name
-    _log(f"[Stack]   > Done {name} in {time.time()-t0:.2f}s | f1={m['f1']:.3f} rec={m['recall']:.3f}")
+    m["fit_sec"] = round(time.time() - t0, 3)  # waktu training per-model
+    _log(f"[Stack]   > Done {name} in {m['fit_sec']:.2f}s | f1={m['f1']:.3f} rec={m['recall']:.3f}")
     return m
 
 def run_one(
@@ -318,12 +322,14 @@ def run_one(
     cv: int, random_state: int, with_xgb: bool, with_mlp: bool,
     fast_sample: Optional[int], feature_select: str, top_n: int, meta_grid: bool,
 ) -> Dict[str, float]:
+    start_run = time.time()
     suffix = _variant_to_tag(smote_variant) if use_smote else "nosmote"
     _log(f"[Stack] Start -> {dataset} ({suffix})")
 
     p_metrics = TAB / f"{dataset}_stack_{suffix}_metrics.csv"
     p_preds   = TAB / f"{dataset}_stack_{suffix}_preds.csv"
-    p_cm      = FIG / f"{dataset}_stack_{suffix}_cm.png"
+    p_cm_png  = FIG / f"{dataset}_stack_{suffix}_cm.png"
+    p_cm_tab  = TAB / f"{dataset}_stack_{suffix}_cm.csv"
     p_roc     = FIG / f"{dataset}_stack_{suffix}_roc.png"
     p_pr      = FIG / f"{dataset}_stack_{suffix}_pr.png"
     p_model   = ART / f"{dataset}_stack_{suffix}.joblib"
@@ -343,38 +349,60 @@ def run_one(
     base_learners = build_base_learners(random_state, with_xgb, with_mlp)
     stack = build_stacking(base_learners, cv)
 
+    grid_sec = 0.0
+    best_meta = None
     if meta_grid:
         _log("[Stack]   > Grid meta-learner …")
         param_grid = {
             "final_estimator__C": [0.1, 1.0, 10.0],
             "final_estimator__solver": ["lbfgs", "liblinear"],
         }
+        t_grid = time.time()
         # n_jobs=1 untuk menghindari memmap read-only saat CV
         grid = GridSearchCV(stack, param_grid=param_grid, scoring="roc_auc", cv=cv, n_jobs=1, verbose=1)
-        stack = grid.fit(Xtr, ytr).best_estimator_
+        grid.fit(Xtr, ytr)
+        grid_sec = round(time.time() - t_grid, 3)
+        best_meta = getattr(grid, "best_params_", None)
+        _log(f"[Stack]   > Meta-grid done in {grid_sec:.2f}s | best={best_meta}")
+        stack = grid.best_estimator_
 
+    # --- Base learners (waktu per-model ikut ke metrics.csv) ---
     rows = [fit_and_eval_single(name, est, Xtr, ytr, Xte, yte) for name, est in base_learners]
 
+    # --- Stacking ---
     _log("[Stack]   > Fit Stacking …")
-    t0 = time.time(); stack.fit(Xtr, ytr)
+    t0 = time.time()
+    stack.fit(Xtr, ytr)
     y_pred = stack.predict(Xte); y_prob = _safe_proba(stack, Xte)
     m_stack = _metrics(yte, y_pred, y_prob); m_stack["model"] = "stacking_lr_meta"
+    m_stack["fit_sec"] = round(time.time() - t0, 3)     # waktu training Stacking
+    m_stack["grid_sec"] = grid_sec                      # waktu grid (bila ada)
     rows.append(m_stack)
-    _log(f"[Stack]   > Done Stacking in {time.time()-t0:.2f}s | f1={m_stack['f1']:.3f}")
+    _log(f"[Stack]   > Done Stacking in {m_stack['fit_sec']:.2f}s | f1={m_stack['f1']:.3f}")
 
+    # --- Tabel metrics lengkap (+fit_sec) ---
     metrics_df = pd.DataFrame(rows)
     if {"f1", "recall", "roc_auc"} <= set(metrics_df.columns):
         metrics_df = metrics_df.sort_values(["f1", "recall", "roc_auc"], ascending=False)
     _savetab(metrics_df, p_metrics)
 
+    # --- Simpan preds ---
     preds_df = pd.DataFrame({"y_true": yte, "y_pred": y_pred, "y_prob": y_prob})
     _savetab(preds_df, p_preds)
 
-    plot_confusion(yte.to_numpy(), y_pred, f"{dataset.title()} - {suffix}", p_cm)
+    # --- Confusion matrix: gambar + tabel CSV ---
+    cm = confusion_matrix(yte.to_numpy(), y_pred, labels=[0, 1])
+    plot_confusion(yte.to_numpy(), y_pred, f"{dataset.title()} - {suffix}", p_cm_png)
+    cm_df = pd.DataFrame(cm, index=["True 0", "True 1"], columns=["Pred 0", "Pred 1"])
+    _savetab(cm_df, p_cm_tab)
+
+    # --- ROC & PR curve (jika proba tersedia) ---
     with suppress(Exception):
         plot_roc(yte.to_numpy(), y_prob, f"{dataset.title()} - ROC ({suffix})", p_roc)
         plot_pr(yte.to_numpy(), y_prob, f"{dataset.title()} - PR ({suffix})", p_pr)
 
+    # --- Simpan artifact model + metadata waktu ---
+    run_sec = round(time.time() - start_run, 3)
     dump({
         "model": stack,
         "feature_columns": list(Xtr.columns),
@@ -382,15 +410,21 @@ def run_one(
         "feature_select": feature_select,
         "col_name_map": name_map,
         "sanitized_feature_names": True,
+        "runtime": {"stack_fit_sec": m_stack["fit_sec"], "grid_sec": grid_sec, "run_sec": run_sec},
         "meta": {"dataset": dataset, "use_smote": use_smote, "smote_variant": smote_variant,
-                 "cv": cv, "random_state": random_state}
-    }, p_model)
+                 "cv": cv, "random_state": random_state, "best_meta": best_meta}
+    }, p_model, compress=3)
 
-    return {"dataset": dataset, "use_smote": use_smote,
-            "variant": _variant_to_tag(smote_variant) if use_smote else "",
-            "accuracy": m_stack["accuracy"], "precision": m_stack["precision"],
-            "recall": m_stack["recall"], "f1": m_stack["f1"],
-            "roc_auc": m_stack["roc_auc"], "pr_auc": m_stack["pr_auc"], "fn": m_stack["fn"]}
+    # --- Nilai untuk ablation_smote.csv (ringkas) ---
+    return {
+        "dataset": dataset,
+        "use_smote": use_smote,
+        "variant": _variant_to_tag(smote_variant) if use_smote else "",
+        "accuracy": m_stack["accuracy"], "precision": m_stack["precision"],
+        "recall": m_stack["recall"], "f1": m_stack["f1"],
+        "roc_auc": m_stack["roc_auc"], "pr_auc": m_stack["pr_auc"], "fn": m_stack["fn"],
+        "stack_fit_sec": m_stack["fit_sec"], "grid_sec": grid_sec, "run_sec": run_sec
+    }
 
 # ---------------- CLI ----------------
 def main():
