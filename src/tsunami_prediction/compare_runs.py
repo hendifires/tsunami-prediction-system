@@ -1,5 +1,4 @@
 from __future__ import annotations
-
 """
 Compare multiple stacking runs (nosmote / smote / smote_tomek / smote_enn)
 by collecting metrics CSVs emitted by stacking_pipeline.py.
@@ -14,12 +13,9 @@ Selection rule per metrics file:
 2) Fallback to the row with the highest F1
 """
 
-# cSpell:ignore nosmote smote_tomek smote_enn smoteenn tomek enn ROC AUC md csv figsize xticks ylabel xlabel
-
 import argparse
-import re
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List
 
 import numpy as np
 import pandas as pd
@@ -29,47 +25,37 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt  # noqa: E402
 
-# ---------------- PATHS ----------------
+# ---------------- PATHS (only what's used) ----------------
 ROOT = Path(__file__).resolve().parents[2]
-DATA = ROOT / "data"
-PROCESSED = DATA / "processed"
 REPORTS = ROOT / "reports"
 TAB = REPORTS / "tables"
 FIG = REPORTS / "figures"
-ART = ROOT / "artifacts"
-for p in [PROCESSED, TAB, FIG, ART]:
+for p in [TAB, FIG]:
     p.mkdir(parents=True, exist_ok=True)
 
 # ---------------- Constants ----------------
 VARIANT_TAGS = ["nosmote", "smote", "smote_tomek", "smote_enn"]
 DATASETS = ["tectonic", "volcanic"]
 
-# Expected metric columns (plus optional timing if tersedia)
+# Expected metric columns (sinkron dengan stacking_pipeline.py)
 _METRIC_COLS = [
     "accuracy", "precision", "recall", "f1", "roc_auc", "pr_auc",
     "tn", "fp", "fn", "tp",
-    "fit_time_s", "stack_fit_time_s", "meta_grid_time_s",
+    "fit_sec", "grid_sec",  # waktu training per-model/stacking dan waktu meta-grid (NaN utk base models)
 ]
-
-_FILE_RE = re.compile(
-    r"^(?P<ds>tectonic|volcanic)_stack_(?P<var>nosmote|smote|smote_tomek|smote_enn)_metrics\.csv$"
-)
 
 # ---------------- Utils ----------------
 def _log(msg: str) -> None:
     print(msg, flush=True)
 
-
 def _save_csv(df: pd.DataFrame, path: Path) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     df.to_csv(path, index=False)
-
 
 def _save_md_table(df: pd.DataFrame, path: Path) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("w", encoding="utf-8") as f:
         f.write(df.to_markdown(index=False))
-
 
 def _savefig(path: Path) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -77,31 +63,21 @@ def _savefig(path: Path) -> None:
     plt.savefig(path, dpi=200, bbox_inches="tight")
     plt.close()
 
-
 # ---------------- Core helpers ----------------
-def _derive_ds_var_from_filename(path: Path) -> Optional[Tuple[str, str]]:
-    m = _FILE_RE.match(path.name)
-    # satu baris, hilangkan saran "lift into else"
-    return (m.group("ds"), m.group("var")) if m else None
-
-
 def _pick_row(df: pd.DataFrame) -> pd.Series:
     """Ambil baris model stacking; fallback ke F1 tertinggi; terakhir baris pertama."""
     if "model" in df.columns:
         sel = df[df["model"] == "stacking_lr_meta"]
         if not sel.empty:
             return sel.iloc[0]
-
     df2 = df.copy()
     if "f1" in df2.columns:
         df2["f1"] = pd.to_numeric(df2["f1"], errors="coerce")
         df2 = df2.sort_values("f1", ascending=False)
         return df2.iloc[0]
-
     return df.iloc[0]
 
-
-def _read_metrics(path: Path) -> Optional[pd.Series]:
+def _read_metrics(path: Path) -> pd.Series | None:
     try:
         df = pd.read_csv(path)
     except Exception as e:
@@ -110,13 +86,12 @@ def _read_metrics(path: Path) -> Optional[pd.Series]:
     if df.empty:
         _log(f"[WARN] metrics file is empty: {path.name}")
         return None
-
     row = _pick_row(df)
+    # pastikan kolom metrik & waktu ada; isi NaN jika tidak
     for c in _METRIC_COLS:
         if c not in row.index:
             row[c] = np.nan
     return row
-
 
 def collect(datasets: List[str], variants: List[str]) -> pd.DataFrame:
     rows: List[Dict] = []
@@ -129,14 +104,11 @@ def collect(datasets: List[str], variants: List[str]) -> pd.DataFrame:
             row = _read_metrics(metrics_path)
             if row is None:
                 continue
-
             out: Dict[str, object] = {"dataset": ds, "variant": var}
             for c in _METRIC_COLS:
                 out[c] = pd.to_numeric(row.get(c, np.nan), errors="coerce")
             rows.append(out)
-
     return pd.DataFrame(rows)
-
 
 def _order_categories(df: pd.DataFrame) -> pd.DataFrame:
     if "dataset" in df.columns:
@@ -145,17 +117,14 @@ def _order_categories(df: pd.DataFrame) -> pd.DataFrame:
         df["variant"] = pd.Categorical(df["variant"], categories=VARIANT_TAGS, ordered=True)
     return df.sort_values(["dataset", "variant"])
 
-
 def _plot_bar(df: pd.DataFrame, metric: str, path: Path) -> None:
-    """Grouped bar: x = variant, hue = dataset. Tanpa walrus-operator."""
+    """Grouped bar: x = variant, hue = dataset."""
     if metric not in df.columns or df.empty:
         _log(f"[INFO] cannot plot: metric '{metric}' missing or df empty.")
         return
-
     present_variants = [v for v in VARIANT_TAGS if v in set(df["variant"].astype(str))]
     x = np.arange(len(present_variants))
     width = 0.35
-
     plt.figure(figsize=(8.5, 4.8))
     for i, ds in enumerate(DATASETS):
         sub = df[df["dataset"] == ds]
@@ -167,13 +136,11 @@ def _plot_bar(df: pd.DataFrame, metric: str, path: Path) -> None:
             else:
                 vals.append(float(sub_v[metric].values[0]))
         plt.bar(x + (i - 0.5) * width, vals, width, label=ds)
-
     plt.xticks(x, present_variants, rotation=0)
     plt.ylabel(metric)
     plt.title(f"Comparison by {metric}")
     plt.legend()
     _savefig(path)
-
 
 # ---------------- CLI ----------------
 def main():
@@ -209,7 +176,6 @@ def main():
         fig_path = FIG / f"compare_{args.plot_metric}.png"
         _plot_bar(df, args.plot_metric, fig_path)
         _log(f"[Compare] Saved: {fig_path}")
-
 
 if __name__ == "__main__":
     main()
