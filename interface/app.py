@@ -1,5 +1,7 @@
 # interface/app.py
 
+from __future__ import annotations
+
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
@@ -8,12 +10,12 @@ from fastapi.middleware.cors import CORSMiddleware
 import os
 import pandas as pd
 
-# ⬇️ nanti kita buat file ini: src/tsunami_prediction/predict.py
-from src.tsunami_prediction.predict import (
+from tsunami_prediction.serve_api import (
     predict_tectonic_stacking,
     predict_volcanic_stacking,
 )
-from src.tsunami_prediction.schemas import (
+# Lebih portable (tanpa prefix "src.")
+from tsunami_prediction.schemas import (
     TectonicRequest,
     VolcanicRequest,
 )
@@ -25,7 +27,7 @@ app = FastAPI(
     docs_url="/docs"
 )
 
-# --- CORS (biar bisa diakses dari frontend) ---
+# --- CORS (dev) ---
 origins = [
     "http://localhost",
     "http://localhost:3000",
@@ -89,13 +91,7 @@ def predict_tectonic(req: TectonicRequest):
             for item in req.datas
         ])
 
-        preds = predict_tectonic_stacking(df_input)  # <- kita tulis di src/...
-        if preds is None:
-            raise HTTPException(
-                status_code=500,
-                detail="Model/artifacts for tectonic prediction not found. Please train the model first."
-            )
-
+        preds = predict_tectonic_stacking(df_input)
         return {
             "predictions": [int(p) for p in preds["prediction"]],
             "probabilities": [float(round(p, 4)) for p in preds["probability"]],
@@ -140,12 +136,6 @@ def predict_volcanic(req: VolcanicRequest):
         ])
 
         preds = predict_volcanic_stacking(df_input)
-        if preds is None:
-            raise HTTPException(
-                status_code=500,
-                detail="Model/artifacts for volcanic prediction not found. Please train the model first."
-            )
-
         return {
             "predictions": [int(p) for p in preds["prediction"]],
             "probabilities": [float(round(p, 4)) for p in preds["probability"]],
