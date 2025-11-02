@@ -15,6 +15,9 @@ from contextlib import suppress
 from pathlib import Path
 from typing import Dict, List, Tuple, Optional
 
+import warnings
+from sklearn.exceptions import ConvergenceWarning
+
 import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
@@ -24,7 +27,7 @@ import pandas as pd
 from joblib import dump
 from sklearn.base import clone
 from sklearn.pipeline import Pipeline
-from sklearn.preprocessing import StandardScaler
+from sklearn.preprocessing import StandardScaler, FunctionTransformer
 from sklearn.linear_model import LogisticRegression, SGDClassifier
 from sklearn.neighbors import KNeighborsClassifier
 from sklearn.naive_bayes import GaussianNB
@@ -41,6 +44,9 @@ from sklearn.metrics import (
     roc_auc_score, average_precision_score, confusion_matrix,
     roc_curve, precision_recall_curve,
 )
+
+# ---- tame noisy warnings (tidak mempengaruhi hasil) ----
+warnings.filterwarnings("ignore", category=ConvergenceWarning)
 
 # ---------------- PATHS ----------------
 ROOT = Path(__file__).resolve().parents[2]
@@ -104,15 +110,38 @@ def _metrics(y_true: np.ndarray, y_pred: np.ndarray, y_prob: Optional[np.ndarray
     out.update({"tn": tn, "fp": fp, "fn": fn, "tp": tp})
     return out
 
+# -------- Sanitize feature names for XGBoost & Stacking --------
+_BAD_CHARS = {"[": "(", "]": ")", "<": "_lt_", ">": "_gt_", "{": "(", "}": ")", "/": "_", "\\": "_", ":": "_", ";": "_", ",": "_", "=": "_"}
+
+def _safe_name(name: object) -> str:
+    s = str(name)
+    for k, v in _BAD_CHARS.items():
+        s = s.replace(k, v)
+    return s.replace(" ", "_")
+
+def sanitize_df_pair(Xtr: pd.DataFrame, Xte: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame, dict[str, str]]:
+    ori_cols = list(Xtr.columns)
+    new_cols: list[str] = []
+    used: set[str] = set()
+    mapping: dict[str, str] = {}
+    for c in ori_cols:
+        base = _safe_name(c)
+        name = base
+        i = 1
+        while name in used:
+            i += 1
+            name = f"{base}_{i}"
+        used.add(name)
+        new_cols.append(name)
+        mapping[str(c)] = name
+    Xtr2 = Xtr.copy(); Xtr2.columns = new_cols
+    xte_cols = [mapping.get(str(c), _safe_name(c)) for c in Xte.columns]
+    Xte2 = Xte.copy(); Xte2.columns = xte_cols
+    return Xtr2, Xte2, mapping
+
 # ---------------- Data loading ----------------
-def load_split(
-    dataset: str, use_smote: bool, smote_variant: Optional[str] = None
-) -> Tuple[pd.DataFrame, pd.DataFrame, pd.Series, pd.Series]:
-    """
-    non-SMOTE: {dataset}_train.csv
-    SMOTE varian: prefer {dataset}_train_{tag}.csv (tag: smote | smote_tomek | smote_enn)
-                  fallback {dataset}_train_smote.csv (legacy)
-    """
+def load_split(dataset: str, use_smote: bool, smote_variant: Optional[str] = None
+               ) -> Tuple[pd.DataFrame, pd.DataFrame, pd.Series, pd.Series]:
     if use_smote:
         tag = _variant_to_tag(smote_variant)
         cand = PROCESSED / f"{dataset}_train_{tag}.csv"
@@ -140,8 +169,7 @@ def load_split(
     return X_train, X_test, y_train, y_test
 
 # ---------------- Feature selection (opsional) ----------------
-def pearson_topn(X: pd.DataFrame, y: pd.Series, top_n: int,
-                 out_tab: Path, out_fig: Path) -> List[str]:
+def pearson_topn(X: pd.DataFrame, y: pd.Series, top_n: int, out_tab: Path, out_fig: Path) -> List[str]:
     num_cols = X.select_dtypes(include="number").columns
     if len(num_cols) == 0:
         _savetab(pd.DataFrame(columns=["feature", "abs_corr"]), out_tab)
@@ -155,7 +183,6 @@ def pearson_topn(X: pd.DataFrame, y: pd.Series, top_n: int,
         vals.append((c, abs(corr)))
     corr_df = pd.DataFrame(vals, columns=["feature", "abs_corr"]).sort_values("abs_corr", ascending=False)
     _savetab(corr_df, out_tab)
-
     top = corr_df.head(top_n)
     plt.figure(figsize=(8, max(3.5, 0.25 * len(top))))
     plt.barh(top["feature"][::-1], top["abs_corr"][::-1])
@@ -163,8 +190,7 @@ def pearson_topn(X: pd.DataFrame, y: pd.Series, top_n: int,
     _savefig(out_fig)
     return top["feature"].tolist()
 
-def rfe_select(X: pd.DataFrame, y: pd.Series, top_n: int,
-               out_tab: Path, out_fig: Path, random_state: int = 42) -> List[str]:
+def rfe_select(X: pd.DataFrame, y: pd.Series, top_n: int, out_tab: Path, out_fig: Path, random_state: int = 42) -> List[str]:
     n = min(top_n, X.shape[1]) if X.shape[1] else 0
     if n == 0:
         _savetab(pd.DataFrame(columns=["feature", "selected"]), out_tab)
@@ -201,12 +227,21 @@ def maybe_feature_select(Xtr: pd.DataFrame, ytr: pd.Series, Xte: pd.DataFrame,
     Xte_s = Xte[sel_test]
     return Xtr_s, Xte_s, sel_test
 
+# ---------------- Helpers (non-lambda, picklable) ----------------
+def to_np_writable(X):
+    arr = np.asarray(X, dtype=float)
+    if not arr.flags.writeable:
+        arr = arr.copy()
+    return arr
+
 # ---------------- Models ----------------
 def build_base_learners(random_state: int, with_xgb: bool, with_mlp: bool) -> List[Tuple[str, object]]:
+    """Semua base learners dikemas Pipeline. NB diberi transformer agar array writable (hindari ValueError)."""
+    to_np_tf = FunctionTransformer(to_np_writable, validate=False)
+
     learners: List[Tuple[str, object]] = [
         ("lr",  Pipeline([("scaler", StandardScaler()),
-                          ("clf", LogisticRegression(max_iter=2000, class_weight="balanced"))])),
-        # Cepat + probabilitas native
+                          ("clf", LogisticRegression(max_iter=5000, class_weight="balanced"))])),
         ("sgd", Pipeline([("scaler", StandardScaler()),
                           ("clf", SGDClassifier(loss="log_loss", alpha=1e-4,
                                                 class_weight="balanced",
@@ -214,7 +249,8 @@ def build_base_learners(random_state: int, with_xgb: bool, with_mlp: bool) -> Li
                                                 n_iter_no_change=5, random_state=random_state))])),
         ("knn", Pipeline([("scaler", StandardScaler()),
                           ("clf", KNeighborsClassifier(n_neighbors=11))])),
-        ("nb",  GaussianNB()),
+        ("nb",  Pipeline([("to_np", to_np_tf),
+                          ("clf", GaussianNB())])),
         ("dt",  DecisionTreeClassifier(random_state=random_state, class_weight="balanced")),
         ("rf",  RandomForestClassifier(n_estimators=300, random_state=random_state,
                                       n_jobs=-1, class_weight="balanced_subsample")),
@@ -234,22 +270,20 @@ def build_base_learners(random_state: int, with_xgb: bool, with_mlp: bool) -> Li
                 n_estimators=200, learning_rate=0.08, max_depth=5,
                 subsample=0.9, colsample_bytree=0.9,
                 eval_metric="logloss", random_state=random_state, n_jobs=-1,
+                tree_method="hist",
             )))
     return learners
 
 def build_stacking(base_learners: List[Tuple[str, object]], cv: int) -> StackingClassifier:
-    try:
-        return StackingClassifier(
-            estimators=base_learners,
-            final_estimator=LogisticRegression(max_iter=3000, class_weight="balanced"),
-            cv=cv, passthrough=True, stack_method="predict_proba", n_jobs=-1
-        )
-    except TypeError:
-        return StackingClassifier(
-            estimators=base_learners,
-            final_estimator=LogisticRegression(max_iter=3000, class_weight="balanced"),
-            cv=cv, passthrough=True, stack_method="predict_proba"
-        )
+    """n_jobs=1 untuk menghindari memmap read-only di proses paralel yang memicu WRITEABLE error."""
+    return StackingClassifier(
+        estimators=base_learners,
+        final_estimator=LogisticRegression(max_iter=8000, class_weight="balanced"),
+        cv=cv,
+        passthrough=True,
+        stack_method="predict_proba",
+        n_jobs=1,  # penting agar stabil saat CV/grid
+    )
 
 # ---------------- Plots ----------------
 def plot_confusion(y_true: np.ndarray, y_pred: np.ndarray, title: str, out_png: Path) -> None:
@@ -284,7 +318,6 @@ def run_one(
     cv: int, random_state: int, with_xgb: bool, with_mlp: bool,
     fast_sample: Optional[int], feature_select: str, top_n: int, meta_grid: bool,
 ) -> Dict[str, float]:
-    # hilangkan negasi pada if-expression
     suffix = _variant_to_tag(smote_variant) if use_smote else "nosmote"
     _log(f"[Stack] Start -> {dataset} ({suffix})")
 
@@ -296,6 +329,9 @@ def run_one(
     p_model   = ART / f"{dataset}_stack_{suffix}.joblib"
 
     Xtr, Xte, ytr, yte = load_split(dataset, use_smote=use_smote, smote_variant=smote_variant)
+
+    # sanitasi nama kolom (untuk XGB & konsistensi)
+    Xtr, Xte, name_map = sanitize_df_pair(Xtr, Xte)
 
     if fast_sample is not None and len(Xtr) > fast_sample:
         _log(f"[Stack]   > FAST mode sample {fast_sample}/{len(Xtr)}")
@@ -313,7 +349,8 @@ def run_one(
             "final_estimator__C": [0.1, 1.0, 10.0],
             "final_estimator__solver": ["lbfgs", "liblinear"],
         }
-        grid = GridSearchCV(stack, param_grid=param_grid, scoring="roc_auc", cv=cv, n_jobs=-1, verbose=1)
+        # n_jobs=1 untuk menghindari memmap read-only saat CV
+        grid = GridSearchCV(stack, param_grid=param_grid, scoring="roc_auc", cv=cv, n_jobs=1, verbose=1)
         stack = grid.fit(Xtr, ytr).best_estimator_
 
     rows = [fit_and_eval_single(name, est, Xtr, ytr, Xte, yte) for name, est in base_learners]
@@ -338,10 +375,16 @@ def run_one(
         plot_roc(yte.to_numpy(), y_prob, f"{dataset.title()} - ROC ({suffix})", p_roc)
         plot_pr(yte.to_numpy(), y_prob, f"{dataset.title()} - PR ({suffix})", p_pr)
 
-    dump({"model": stack, "feature_columns": list(Xtr.columns),
-          "selected_columns": sel_cols, "feature_select": feature_select,
-          "meta": {"dataset": dataset, "use_smote": use_smote, "smote_variant": smote_variant,
-                   "cv": cv, "random_state": random_state}}, p_model)
+    dump({
+        "model": stack,
+        "feature_columns": list(Xtr.columns),
+        "selected_columns": sel_cols,
+        "feature_select": feature_select,
+        "col_name_map": name_map,
+        "sanitized_feature_names": True,
+        "meta": {"dataset": dataset, "use_smote": use_smote, "smote_variant": smote_variant,
+                 "cv": cv, "random_state": random_state}
+    }, p_model)
 
     return {"dataset": dataset, "use_smote": use_smote,
             "variant": _variant_to_tag(smote_variant) if use_smote else "",
@@ -355,23 +398,28 @@ def main():
     ap.add_argument("--datasets", nargs="+", default=["tectonic", "volcanic"])
     ap.add_argument("--cv", type=int, default=3)
     ap.add_argument("--random-state", type=int, default=42)
-    # XGB dan meta-grid AKTIF secara default, bisa dimatikan dengan --no-xgb / --no-meta-grid
-    ap.add_argument("--with-xgb", action="store_true", default=True)
-    ap.add_argument("--no-xgb", action="store_true")
+
+    # Toggles: default = ON; bisa dimatikan dengan --no-xgb / --no-meta-grid
+    ap.add_argument("--with-xgb", dest="with_xgb", action="store_true")
+    ap.add_argument("--no-xgb",  dest="with_xgb", action="store_false")
+    ap.set_defaults(with_xgb=True)
+
+    ap.add_argument("--meta-grid",    dest="meta_grid", action="store_true")
+    ap.add_argument("--no-meta-grid", dest="meta_grid", action="store_false")
+    ap.set_defaults(meta_grid=True)
+
     ap.add_argument("--with-mlp", action="store_true")
-    ap.add_argument("--meta-grid", action="store_true", default=True)
-    ap.add_argument("--no-meta-grid", action="store_true")
     ap.add_argument("--fast", action="store_true", help="subsample training rows for fast debugging")
     ap.add_argument("--fast-n", type=int, default=5000)
-    ap.add_argument("--feature-select", choices=["none", "pearson", "rfe"], default="none")
+    ap.add_argument("--feature-select", choices=["none","pearson","rfe"], default="none")
     ap.add_argument("--top-n", type=int, default=30)
     ap.add_argument("--ablation", action="store_true",
                     help="run non-SMOTE + SMOTE + SMOTE_TOMEK + SMOTEENN and write ablation_smote.csv")
-    ap.add_argument("--use-smote", choices=["auto", "yes", "no"], default="auto")
+    ap.add_argument("--use-smote", choices=["auto","yes","no"], default="auto")
     args = ap.parse_args()
 
-    with_xgb  = args.with_xgb and not args.no_xgb
-    meta_grid = args.meta_grid and not args.no_meta_grid
+    with_xgb  = args.with_xgb
+    meta_grid = args.meta_grid
     fast_n = args.fast_n if args.fast else None
 
     _log("[Stack] Pipeline start …")
