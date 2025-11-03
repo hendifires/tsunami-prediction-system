@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from pathlib import Path
 import os
+
 import pandas as pd
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import HTMLResponse
@@ -38,17 +39,27 @@ if STATIC_DIR.is_dir():
 
 
 @app.get("/healthz", tags=["Health"])
-def healthz():
+def healthz() -> dict[str, str]:
+    """Health check sederhana."""
     return {"status": "ok"}
 
 
 @app.get("/", response_class=HTMLResponse, tags=["Landing"])
-async def root():
-    """Render interface/static/index.html bila ada; fallback teks sederhana."""
+async def root() -> HTMLResponse:
+    """
+    Render interface/static/index.html bila ada;
+    jika tidak, kembalikan HTML sederhana.
+    """
     index_html = STATIC_DIR / "index.html"
     if index_html.exists():
-        return HTMLResponse(content=index_html.read_text(encoding="utf-8"), status_code=200)
-    return HTMLResponse("<h1>Tsunami Prediction API</h1><p>Service is running.</p>", status_code=200)
+        return HTMLResponse(
+            content=index_html.read_text(encoding="utf-8"),
+            status_code=200,
+        )
+    return HTMLResponse(
+        "<h1>Tsunami Prediction API</h1><p>Service is running.</p>",
+        status_code=200,
+    )
 
 
 # ─────────────────────────────────────────
@@ -59,7 +70,7 @@ async def root():
     tags=["Prediction"],
     summary="Predict Tsunami from Tectonic Earthquake Data",
 )
-def predict_tectonic(req: TectonicRequest):
+def predict_tectonic(req: TectonicRequest) -> dict[str, list[float]]:
     if not req.datas:
         raise HTTPException(status_code=400, detail="Input 'datas' is empty.")
 
@@ -81,14 +92,20 @@ def predict_tectonic(req: TectonicRequest):
 
     try:
         preds = predict_tectonic_stacking(df_input)
-    except FileNotFoundError as e:
-        # artefak model belum ada
-        raise HTTPException(status_code=500, detail=str(e))
-    except Exception as e:
-        raise HTTPException(status_code=400, detail=f"Prediction error (tectonic): {e}")
+    except FileNotFoundError as exc:
+        # Artefak model belum ada
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(
+            status_code=400,
+            detail=f"Prediction error (tectonic): {exc}",
+        ) from exc
 
     if preds is None or preds.empty:
-        raise HTTPException(status_code=500, detail="Empty prediction result.")
+        raise HTTPException(
+            status_code=500,
+            detail="Empty prediction result.",
+        )
 
     return {
         "predictions": [int(p) for p in preds["prediction"]],
@@ -104,7 +121,7 @@ def predict_tectonic(req: TectonicRequest):
     tags=["Prediction"],
     summary="Predict Tsunami from Volcanic Eruption Data",
 )
-def predict_volcanic(req: VolcanicRequest):
+def predict_volcanic(req: VolcanicRequest) -> dict[str, list[float]]:
     if not req.datas:
         raise HTTPException(status_code=400, detail="Input 'datas' is empty.")
 
@@ -127,13 +144,19 @@ def predict_volcanic(req: VolcanicRequest):
 
     try:
         preds = predict_volcanic_stacking(df_input)
-    except FileNotFoundError as e:
-        raise HTTPException(status_code=500, detail=str(e))
-    except Exception as e:
-        raise HTTPException(status_code=400, detail=f"Prediction error (volcanic): {e}")
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(
+            status_code=400,
+            detail=f"Prediction error (volcanic): {exc}",
+        ) from exc
 
     if preds is None or preds.empty:
-        raise HTTPException(status_code=500, detail="Empty prediction result.")
+        raise HTTPException(
+            status_code=500,
+            detail="Empty prediction result.",
+        )
 
     return {
         "predictions": [int(p) for p in preds["prediction"]],
@@ -143,19 +166,10 @@ def predict_volcanic(req: VolcanicRequest):
 
 if __name__ == "__main__":
     # Jalankan langsung: python interface/app.py
-    # Catatan: reload=True butuh import-string ("interface.app:app").
-    # Di sini pakai object langsung agar tidak perlu paket 'interface'.
+    # Untuk mode development biasanya pakai:
+    #   uvicorn interface.app:app --reload
     import uvicorn
 
     host = os.getenv("HOST", "127.0.0.1")
     port = int(os.getenv("PORT", "8000"))
     uvicorn.run(app, host=host, port=port, reload=False)
-    
-    import os
-# ...
-thr_override = os.getenv("TSU_VOL_THRESHOLD")
-if model_meta.get("meta", {}).get("dataset") == "volcanic" and thr_override:
-    try:
-        model_meta["decision_threshold"] = float(thr_override)
-    except Exception:
-        pass
