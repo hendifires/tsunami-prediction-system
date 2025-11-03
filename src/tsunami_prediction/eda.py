@@ -107,7 +107,7 @@ def missing_value_fraction(df: pd.DataFrame, name: str):
 
 def numeric_distributions(df: pd.DataFrame, numeric_cols: list[str], name: str):
     numeric_cols = [c for c in numeric_cols if c in df.columns]
-    if not numeric_cols:  # simplified len-comparison
+    if not numeric_cols:
         return
     cols = min(4, len(numeric_cols))
     rows = int(np.ceil(len(numeric_cols) / cols))
@@ -143,6 +143,26 @@ def correlation_heatmap(df: pd.DataFrame, numeric_cols: list[str], name: str):
     _savefig(FIG / f"{name}_corr_heatmap.png")
 
 
+def correlation_with_target(df: pd.DataFrame, numeric_cols: list[str], target: str, name: str):
+    """
+    Matriks korelasi yang juga memasukkan kolom target (tsu),
+    mirip Gambar 'Correlation Matrix (including Tsunami)' di tesis.
+    """
+    cols = [c for c in numeric_cols if c in df.columns]
+    if target in df.columns and target not in cols:
+        cols.append(target)
+    if len(cols) < 2:
+        return
+    corr = df[cols].corr(numeric_only=True)
+    # simpan tabel
+    corr.to_csv(TAB / f"{name}_corr_with_target.csv", index=True)
+    # plot heatmap
+    plt.figure(figsize=(0.8 * len(cols) + 3, 0.8 * len(cols) + 3))
+    sns.heatmap(corr, cmap="coolwarm", vmin=-1, vmax=1, annot=True, fmt=".2f", linewidths=0.3)
+    plt.title(f"Correlation Matrix (including {target}) — {name}")
+    _savefig(FIG / f"{name}_corr_with_target.png")
+
+
 def pairplot_sample(df: pd.DataFrame, cols: list[str], hue: str, name: str, max_rows: int = 800):
     """
     Robust pairplot:
@@ -155,6 +175,8 @@ def pairplot_sample(df: pd.DataFrame, cols: list[str], hue: str, name: str, max_
     if hue in use_cols:
         use_cols.remove(hue)
     num_cols = [c for c in use_cols if pd.api.types.is_numeric_dtype(df[c])]
+
+    # hapus duplikat sambil menjaga urutan
     num_cols = list(dict.fromkeys(num_cols))
     if hue not in df.columns or len(num_cols) < 2:
         return
@@ -163,9 +185,11 @@ def pairplot_sample(df: pd.DataFrame, cols: list[str], hue: str, name: str, max_
     if len(sub) > max_rows:
         sub = sub.sample(max_rows, random_state=42)
 
-    for c in num_cols:
-        if sub[c].apply(lambda x: isinstance(x, (list, tuple, np.ndarray))).any():
-            num_cols.remove(c)
+    # buang kolom yang isinya list/array
+    num_cols = [
+        c for c in num_cols
+        if not sub[c].apply(lambda x: isinstance(x, (list, tuple, np.ndarray))).any()
+    ]
     if len(num_cols) < 2:
         return
 
@@ -179,6 +203,45 @@ def pairplot_sample(df: pd.DataFrame, cols: list[str], hue: str, name: str, max_
     )
     g.fig.suptitle(f"{name.capitalize()}: Pairplot (sample)", y=1.03)
     _savefig(FIG / f"{name}_pairplot.png")
+
+
+def numeric_vs_target_distributions(
+    df: pd.DataFrame,
+    cols: list[str],
+    target: str,
+    name: str,
+    outfile: str | None = None,
+):
+    """
+    Histogram fitur numerik dengan hue=target (tsu),
+    meniru Gambar 'Hubungan Data Numerik dengan Target Tsunami'.
+    """
+    if target not in df.columns:
+        return
+    cols = [c for c in cols if c in df.columns]
+    if not cols:
+        return
+
+    ncols = min(2, len(cols))
+    nrows = int(np.ceil(len(cols) / ncols))
+
+    plt.figure(figsize=(5 * ncols, 3.2 * nrows))
+    for i, c in enumerate(cols, 1):
+        plt.subplot(nrows, ncols, i)
+        sns.histplot(
+            data=df,
+            x=c,
+            hue=target,
+            kde=True,
+            bins=30,
+            stat="count",
+            common_norm=False,
+            element="step",
+        )
+        plt.title(c)
+    plt.suptitle(f"Numeric Features vs {target} — {name}", y=1.02)
+    fname = outfile or f"{name}_num_vs_{target}.png"
+    _savefig(FIG / fname)
 
 
 def temporal_plots(df: pd.DataFrame, name: str, target: str = "tsu"):
@@ -201,8 +264,10 @@ def temporal_plots(df: pd.DataFrame, name: str, target: str = "tsu"):
 
     mean, std = yearly.mean(), yearly.std()
     spike = yearly[yearly > mean + 2 * std]
-    _savetab(spike.rename("count").reset_index().rename(columns={"index": "spike_year"}),
-             TAB / f"{name}_spike_years.csv")
+    _savetab(
+        spike.rename("count").reset_index().rename(columns={"index": "spike_year"}),
+        TAB / f"{name}_spike_years.csv",
+    )
 
     plt.figure(figsize=(9, 4))
     plt.plot(yearly.index, yearly.values, marker="o")
@@ -231,14 +296,20 @@ def spatial_scatter(df: pd.DataFrame, name: str, target: str = "tsu"):
         plt.ylim(-90, 90)
         if target in df.columns:
             sns.scatterplot(
-                data=df, x="longitude", y="latitude",
-                hue=target, s=8, alpha=0.6, palette="Set1"
+                data=df,
+                x="longitude",
+                y="latitude",
+                hue=target,
+                s=8,
+                alpha=0.6,
+                palette="Set1",
             )
             plt.legend(title=target, loc="upper right")
         else:
             plt.scatter(df["longitude"], df["latitude"], s=8, alpha=0.6)
         plt.title(f"Global Scatter (lon/lat) — {name}")
-        plt.xlabel("Longitude"); plt.ylabel("Latitude")
+        plt.xlabel("Longitude")
+        plt.ylabel("Latitude")
         _savefig(FIG / f"{name}_global_scatter.png")
 
     # pakai PyGMT hanya jika diminta lewat env
@@ -248,31 +319,47 @@ def spatial_scatter(df: pd.DataFrame, name: str, target: str = "tsu"):
 
     try:
         import pygmt  # type: ignore
+
         # Senyapkan log GMT (hindari warning “(s - y_min) …”)
         with pygmt.config(VERBOSE="q"):
             fig = pygmt.Figure()
             fig.tilemap(
                 region=[-180, 180, -75, 75],
                 projection="M120/0/20c",
-                source=("https://server.arcgisonline.com/ArcGIS/rest/services/"
-                        "World_Street_Map/MapServer/tile/{z}/{y}/{x}.png"),
-                frame=["xafg", "yafg", f"+t{name.capitalize()} Events: Global Distribution"],
+                source=(
+                    "https://server.arcgisonline.com/ArcGIS/rest/services/"
+                    "World_Street_Map/MapServer/tile/{z}/{y}/{x}.png"
+                ),
+                frame=[
+                    "xafg",
+                    "yafg",
+                    f"+t{name.capitalize()} Events: Global Distribution",
+                ],
             )
             if target in df.columns:
                 for val in sorted(pd.Series(df[target]).dropna().unique()):
                     sub = df[df[target] == val]
                     fig.plot(
-                        x=sub["longitude"], y=sub["latitude"],
+                        x=sub["longitude"],
+                        y=sub["latitude"],
                         style="c0.08c",
                         fill=("red" if int(val) == 1 else "dodgerblue"),
-                        pen="black", label=f"tsu={int(val)}",
+                        pen="black",
+                        label=f"tsu={int(val)}",
                     )
                 fig.legend(position="JTR+jTR+o0.3c", box=True)
             else:
-                fig.plot(x=df["longitude"], y=df["latitude"], style="c0.08c", fill="black", pen="black")
+                fig.plot(
+                    x=df["longitude"],
+                    y=df["latitude"],
+                    style="c0.08c",
+                    fill="black",
+                    pen="black",
+                )
             fig.savefig(str(FIG / f"{name}_global_map.png"))
     except Exception:
         _fallback()
+
 
 # ---------- SMALL HELPERS TO REMOVE DUPLICATION ----------
 def _plot_top_counts(
@@ -291,7 +378,10 @@ def _plot_top_counts(
     if s.empty:
         return
     if table_name:
-        _savetab(s.rename_axis(s.index.name or "key").reset_index(name="count"), TAB / table_name)
+        _savetab(
+            s.rename_axis(s.index.name or "key").reset_index(name="count"),
+            TAB / table_name,
+        )
 
     plt.figure(figsize=(9, 4.2))
     if orient == "h":
@@ -402,28 +492,52 @@ def run_full_eda(df: pd.DataFrame, ds_name: str, target: str = "tsu"):
     # simpan basic info
     (TAB / f"{ds_name}_info.txt").write_text(_info_to_txt(df), encoding="utf-8")
     _savetab(df.head(20), TAB / f"{ds_name}_head20.csv")
-    _savetab(df.describe(include="all").T.reset_index().rename(columns={"index": "feature"}),
-             TAB / f"{ds_name}_describe.csv")
+    _savetab(
+        df.describe(include="all").T.reset_index().rename(columns={"index": "feature"}),
+        TAB / f"{ds_name}_describe.csv",
+    )
 
     # normalisasi nama tanggal kalau masih mo/dy
     if "mo" in df.columns or "dy" in df.columns:
         df = df.rename(columns={"mo": "month", "dy": "day"})
 
     # list kolom numerik (kecuali target)
-    numeric_cols = [c for c in df.columns if pd.api.types.is_numeric_dtype(df[c]) and c != target]
+    numeric_cols = [
+        c
+        for c in df.columns
+        if pd.api.types.is_numeric_dtype(df[c]) and c != target
+    ]
 
     class_distribution(df, target, ds_name)
     missing_value_fraction(df, ds_name)
     numeric_distributions(df, numeric_cols, ds_name)
     correlation_heatmap(df, numeric_cols, ds_name)
+    correlation_with_target(df, numeric_cols, target, ds_name)
     temporal_plots(df, ds_name, target=target)
     spatial_scatter(df, ds_name, target=target)
 
-    # Pairplots dataset-spesifik
+    # visual khusus per dataset
     if ds_name == "tectonic":
+        # histogram numerik per kelas tsunami (mirip Gambar 4)
+        numeric_vs_target_distributions(
+            df,
+            cols=["mag", "depth", "latitude", "longitude"],
+            target=target,
+            name=ds_name,
+            outfile="tectonic_num_vs_tsu.png",
+        )
         pp_cols = ["mag", "depth", "latitude", "longitude", target]
     else:
+        # volcanic: sesuaikan fitur penting
+        numeric_vs_target_distributions(
+            df,
+            cols=["eq", "elevation", "distance_to_coast_km", "latitude"],
+            target=target,
+            name=ds_name,
+            outfile="volcanic_num_vs_tsu.png",
+        )
         pp_cols = ["vei", "elevation", "latitude", "longitude", target]
+
     pairplot_sample(df, pp_cols, hue=target, name=ds_name)
 
 
@@ -449,7 +563,11 @@ def main(datasets: list[str]):
 
 if __name__ == "__main__":
     ap = argparse.ArgumentParser(description="EDA for tectonic/volcanic")
-    ap.add_argument("--datasets", nargs="+", default=["tectonic", "volcanic"],
-                    help="list dataset names: tectonic volcanic")
+    ap.add_argument(
+        "--datasets",
+        nargs="+",
+        default=["tectonic", "volcanic"],
+        help="list dataset names: tectonic volcanic",
+    )
     args = ap.parse_args()
     main(args.datasets)

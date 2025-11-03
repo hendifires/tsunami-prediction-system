@@ -14,6 +14,14 @@ SMOTE pipeline (tectonic & volcanic) dengan anti-data-leakage:
     - reports/tables/{dataset}_{var_tag}_summary.csv
     - reports/figures/{dataset}_{var_tag}_pie.png, ..._bar.png
     - artifacts/{dataset}_{var_tag}_config.joblib
+
+Tambahan visual konseptual (simulasi 2D, bukan data asli):
+- reports/figures/smote_mechanism.png       : ilustrasi garis interpolasi SMOTE.
+- reports/figures/minority_regions.png      : sebaran minority (safe/borderline/abnormal).
+- reports/figures/simulated_oversampling_grid.png : grid sebelum/ sesudah SMOTE, SMOTE+Tomek, SMOTEENN.
+- reports/tables/smote_mechanism_points.csv
+- reports/tables/smote_minority_region_counts.csv
+- reports/tables/smote_simulated_summary.csv
 """
 
 import argparse
@@ -288,6 +296,255 @@ def _variant_tag(variant: str) -> str:
         return "smote_enn"
     raise ValueError("Unknown variant")
 
+# ---------- Visualisasi konseptual SMOTE (simulasi 2D) ----------
+def _make_simulated_2d(random_state: int = 42) -> Tuple[np.ndarray, np.ndarray]:
+    """Buat dataset 2D imbalanced untuk ilustrasi SMOTE."""
+    from sklearn.datasets import make_classification
+
+    X, y = make_classification(
+        n_samples=600,
+        n_features=2,
+        n_redundant=0,
+        n_clusters_per_class=1,
+        weights=[0.9, 0.1],
+        class_sep=1.0,
+        random_state=random_state,
+    )
+    return X, y
+
+def visualize_smote_mechanism(random_state: int = 42):
+    """
+    Gambar garis interpolasi SMOTE antara satu titik minority dan tetangganya.
+    Output:
+      - figures/smote_mechanism.png
+      - tables/smote_mechanism_points.csv
+    """
+    try:
+        from sklearn.neighbors import NearestNeighbors
+    except Exception:
+        print("[WARN] sklearn.neighbors tidak tersedia; skip smote_mechanism.png")
+        return
+
+    X, y = _make_simulated_2d(random_state)
+    X_min = X[y == 1]
+    if len(X_min) < 2:
+        return
+
+    nn = NearestNeighbors(n_neighbors=3)
+    nn.fit(X_min)
+    dists, idxs = nn.kneighbors(X_min)
+    base_idx = 0
+    neigh_idx = idxs[base_idx, 1]
+
+    x_i = X_min[base_idx]
+    x_n = X_min[neigh_idx]
+    alpha = 0.4
+    x_new = x_i + alpha * (x_n - x_i)
+
+    # Simpan koordinat ke tabel
+    df_pts = pd.DataFrame(
+        [
+            {"role": "minority_base", "x1": x_i[0], "x2": x_i[1]},
+            {"role": "minority_neighbor", "x1": x_n[0], "x2": x_n[1]},
+            {"role": "synthetic_point", "x1": x_new[0], "x2": x_new[1]},
+        ]
+    )
+    _savetab(df_pts, TAB / "smote_mechanism_points.csv")
+
+    # Plot
+    plt.figure(figsize=(6, 5))
+    plt.scatter(X[y == 0, 0], X[y == 0, 1], s=15, alpha=0.5, label="Majority")
+    plt.scatter(X_min[:, 0], X_min[:, 1], s=25, alpha=0.8, label="Minority", color="orange")
+
+    plt.scatter(x_i[0], x_i[1], s=80, marker="*", color="red", label="Base minority")
+    plt.scatter(x_n[0], x_n[1], s=80, marker="X", color="green", label="Neighbor")
+    plt.scatter(x_new[0], x_new[1], s=80, marker="^", color="purple", label="Synthetic")
+
+    # garis interpolasi
+    plt.plot([x_i[0], x_n[0]], [x_i[1], x_n[1]], "k--", alpha=0.7)
+    plt.plot([x_i[0], x_new[0]], [x_i[1], x_new[1]], "k-.", alpha=0.7)
+
+    plt.title("Illustration of SMOTE Data Generation (2D Simulation)")
+    plt.xlabel("Feature 1")
+    plt.ylabel("Feature 2")
+    plt.legend(loc="best")
+    _savefig(FIG / "smote_mechanism.png")
+
+def visualize_minority_regions(random_state: int = 42):
+    """
+    Kategorisasi minority menjadi Safe / Borderline / Abnormal (rare+outlier)
+    berdasarkan tetangga terdekat (seperti konsep Borderline-SMOTE).
+    Output:
+      - figures/minority_regions.png
+      - tables/smote_minority_region_counts.csv
+    """
+    try:
+        from sklearn.neighbors import NearestNeighbors
+    except Exception:
+        print("[WARN] sklearn.neighbors tidak tersedia; skip minority_regions.png")
+        return
+
+    X, y = _make_simulated_2d(random_state)
+    k = 6
+    nn = NearestNeighbors(n_neighbors=k + 1)
+    nn.fit(X)
+    dists, idxs = nn.kneighbors(X)
+
+    cats = []
+    for i, lab in enumerate(y):
+        if lab != 1:
+            cats.append("majority")
+            continue
+        neigh_idx = idxs[i, 1:]
+        neigh_labels = y[neigh_idx]
+        n_majority = int((neigh_labels == 0).sum())
+        if n_majority == 0:
+            cats.append("safe")
+        elif n_majority < k // 2:
+            cats.append("borderline")
+        else:
+            cats.append("abnormal")
+
+    cats = np.array(cats)
+    # hitung & simpan tabel
+    counts = pd.Series(cats).value_counts().rename_axis("region_type").reset_index(name="count")
+    _savetab(counts, TAB / "smote_minority_region_counts.csv")
+
+    plt.figure(figsize=(6.5, 5))
+    # majority
+    plt.scatter(
+        X[cats == "majority", 0],
+        X[cats == "majority", 1],
+        s=15,
+        alpha=0.5,
+        label="Majority class",
+        color="steelblue",
+    )
+    # minority safe, borderline, abnormal
+    plt.scatter(
+        X[cats == "safe", 0],
+        X[cats == "safe", 1],
+        s=35,
+        alpha=0.9,
+        label="Minority - Safe",
+        color="green",
+    )
+    plt.scatter(
+        X[cats == "borderline", 0],
+        X[cats == "borderline", 1],
+        s=35,
+        alpha=0.9,
+        label="Minority - Borderline",
+        color="orange",
+    )
+    plt.scatter(
+        X[cats == "abnormal", 0],
+        X[cats == "abnormal", 1],
+        s=40,
+        alpha=0.9,
+        label="Minority - Abnormal",
+        color="red",
+    )
+
+    plt.title("Minority Regions: Safe / Borderline / Abnormal (2D Simulation)")
+    plt.xlabel("Feature 1")
+    plt.ylabel("Feature 2")
+    plt.legend(loc="best", fontsize=8)
+    _savefig(FIG / "minority_regions.png")
+
+def visualize_simulated_oversampling_grid(random_state: int = 42):
+    """
+    Grid perbandingan sebelum & sesudah oversampling:
+    Baseline, SMOTE, SMOTE+Tomek, SMOTEENN.
+    Output:
+      - figures/simulated_oversampling_grid.png
+      - tables/smote_simulated_summary.csv
+    """
+    try:
+        from imblearn.over_sampling import SMOTE
+        from imblearn.combine import SMOTETomek, SMOTEENN
+    except Exception:
+        print("[WARN] imblearn tidak tersedia; skip simulated_oversampling_grid.png")
+        return
+
+    X, y = _make_simulated_2d(random_state)
+
+    # baseline
+    variants = {"Baseline": (X, y)}
+
+    sm = SMOTE(random_state=random_state, k_neighbors=5)
+    X_sm, y_sm = sm.fit_resample(X, y)
+    variants["SMOTE"] = (X_sm, y_sm)
+
+    smt = SMOTETomek(random_state=random_state, smote=SMOTE(random_state=random_state, k_neighbors=5))
+    X_smt, y_smt = smt.fit_resample(X, y)
+    variants["SMOTE+Tomek"] = (X_smt, y_smt)
+
+    sme = SMOTEENN(random_state=random_state, smote=SMOTE(random_state=random_state, k_neighbors=5))
+    X_sme, y_sme = sme.fit_resample(X, y)
+    variants["SMOTEENN"] = (X_sme, y_sme)
+
+    # summary tabel
+    rows = []
+    for name, (Xv, yv) in variants.items():
+        vc = pd.Series(yv).value_counts().sort_index()
+        rows.append(
+            {
+                "variant": name,
+                "n_majority": int(vc.get(0, 0)),
+                "n_minority": int(vc.get(1, 0)),
+            }
+        )
+    _savetab(pd.DataFrame(rows), TAB / "smote_simulated_summary.csv")
+
+    # plot grid
+    plt.figure(figsize=(10, 8))
+    titles = ["Baseline", "SMOTE", "SMOTE+Tomek", "SMOTEENN"]
+    for i, t in enumerate(titles, 1):
+        Xv, yv = variants[t]
+        plt.subplot(2, 2, i)
+        plt.scatter(
+            Xv[yv == 0, 0],
+            Xv[yv == 0, 1],
+            s=10,
+            alpha=0.5,
+            label="Majority",
+            color="steelblue",
+        )
+        plt.scatter(
+            Xv[yv == 1, 0],
+            Xv[yv == 1, 1],
+            s=15,
+            alpha=0.8,
+            label="Minority",
+            color="orange",
+        )
+        plt.title(t)
+        if i in (1, 3):
+            plt.ylabel("Feature 2")
+        if i in (3, 4):
+            plt.xlabel("Feature 1")
+        if i == 1:
+            plt.legend(loc="best", fontsize=8)
+
+    plt.suptitle("Simulated Oversampling: Baseline vs SMOTE Variants", y=0.95)
+    _savefig(FIG / "simulated_oversampling_grid.png")
+
+def make_smote_conceptual_visuals(random_state: int = 42):
+    """
+    Wrapper untuk memanggil semua visual konseptual SMOTE.
+    Dipanggil sekali di akhir pipeline.
+    """
+    print("[SMOTE] Generating conceptual SMOTE visuals (simulation)…")
+    try:
+        visualize_smote_mechanism(random_state=random_state)
+        visualize_minority_regions(random_state=random_state)
+        visualize_simulated_oversampling_grid(random_state=random_state)
+    except Exception as e:
+        print(f"[WARN] Gagal membuat visual SMOTE simulasi: {e!r}")
+    else:
+        print("[SMOTE] Conceptual visuals saved to:", FIG)
+
 # ---------- Main runner per dataset ----------
 def run_one(
     dataset: str,
@@ -435,6 +692,10 @@ def main():
             sampling_strategy=sampling_strategy,
             variant=args.variant,
         )
+
+    # Visualisasi konsep SMOTE (simulasi 2D) sekali di akhir
+    make_smote_conceptual_visuals(random_state=args.random_state)
+
     print(f"[DONE] SMOTE pipeline selesai.\n - FIG: {FIG}\n - TAB: {TAB}\n - ART: {ART}\n - DATA: {PROCESSED}")
 
 if __name__ == "__main__":

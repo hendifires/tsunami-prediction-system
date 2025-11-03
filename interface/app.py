@@ -150,3 +150,12 @@ if __name__ == "__main__":
     host = os.getenv("HOST", "127.0.0.1")
     port = int(os.getenv("PORT", "8000"))
     uvicorn.run(app, host=host, port=port, reload=False)
+    
+    import os
+# ...
+thr_override = os.getenv("TSU_VOL_THRESHOLD")
+if model_meta.get("meta", {}).get("dataset") == "volcanic" and thr_override:
+    try:
+        model_meta["decision_threshold"] = float(thr_override)
+    except Exception:
+        pass

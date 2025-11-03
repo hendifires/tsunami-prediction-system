@@ -1,5 +1,5 @@
 from __future__ import annotations
-# cSpell:ignore nosmote smoteenn tomek writeable joblib OOF
+# cSpell:ignore nosmote smoteenn tomek passthrough liblinear lbfgs xgb oof proba preds joblib writeable sklearn hyperparams
 
 """
 Stacking Ensemble Pipeline + SMOTE Ablation (fast & robust)
@@ -10,9 +10,20 @@ Stacking Ensemble Pipeline + SMOTE Ablation (fast & robust)
 - Aggregated ablation: reports/tables/ablation_smote.csv
 
 Tambahan:
-- Kolom waktu: fit_sec (per model & stacking), grid_sec (waktu meta-grid), run_sec (durasi total run_one)
-- Simpan confusion matrix sebagai gambar (reports/figures) dan tabel CSV (reports/tables)
-- Cari decision_threshold optimal (F-beta) via OOF CV, disimpan ke artifact (dipakai serve_api).
+- Waktu: fit_sec (per model + stacking), grid_sec (meta-grid), run_sec (durasi total).
+- Simpan confusion matrix sebagai gambar (reports/figures) dan CSV (reports/tables).
+- Cari decision_threshold optimal (F-beta) via OOF CV; disimpan ke artifact (dipakai serve_api).
+- Kebijakan threshold:
+  * Volcanic: precision-leaning (beta=0.75, min_precision=0.88).
+  * Tectonic: balanced (beta=1.0, tanpa syarat min_precision).
+
+Tambahan untuk dokumentasi tesis:
+- reports/figures/stacking_architecture.png
+    Diagram arsitektur stacking (base learners → meta-learner).
+- reports/tables/model_hyperparams.csv
+    Ringkasan model & hyperparameter utama untuk semua base & meta learner.
+- reports/tables/runtime_summary.csv
+    Ringkasan waktu eksekusi per dataset/varian (stack_fit_sec, grid_sec, run_sec).
 """
 
 import argparse
@@ -27,6 +38,8 @@ from sklearn.exceptions import ConvergenceWarning
 import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
+from matplotlib.patches import FancyBboxPatch, FancyArrowPatch
+
 import numpy as np
 import pandas as pd
 
@@ -53,6 +66,7 @@ from sklearn.metrics import (
 
 # ---- tame noisy warnings (tidak mempengaruhi hasil) ----
 warnings.filterwarnings("ignore", category=ConvergenceWarning)
+warnings.filterwarnings("ignore", category=FutureWarning)
 
 # ---------------- PATHS ----------------
 ROOT = Path(__file__).resolve().parents[2]
@@ -67,8 +81,11 @@ for p in [PROCESSED, TAB, FIG, ART]:
 
 # ---------- SMOTE tag helper ----------
 _TAG_MAP = {"smote": "smote", "smote_tomek": "smote_tomek", "smoteenn": "smote_enn"}
+
+
 def _variant_to_tag(variant: Optional[str]) -> str:
     return _TAG_MAP.get((variant or "smote").lower(), (variant or "smote").lower())
+
 
 SMOTE_VARIANTS = ["smote", "smote_tomek", "smoteenn"]
 
@@ -76,18 +93,22 @@ SMOTE_VARIANTS = ["smote", "smote_tomek", "smoteenn"]
 def _log(msg: str) -> None:
     print(msg, flush=True)
 
+
 def _read_csv(p: Path) -> pd.DataFrame:
     return pd.read_csv(p)
+
 
 def _savetab(df: pd.DataFrame, path: Path) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     df.to_csv(path, index=False)
+
 
 def _savefig(path: Path) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     plt.tight_layout()
     plt.savefig(path, dpi=200, bbox_inches="tight")
     plt.close()
+
 
 def _safe_proba(model, X) -> np.ndarray:
     if hasattr(model, "predict_proba"):
@@ -98,6 +119,7 @@ def _safe_proba(model, X) -> np.ndarray:
         return 1.0 / (1.0 + np.exp(-z))
     return model.predict(X)
 
+
 def _metrics(y_true: np.ndarray, y_pred: np.ndarray, y_prob: Optional[np.ndarray]) -> Dict[str, float]:
     out: Dict[str, float] = {
         "accuracy": accuracy_score(y_true, y_pred),
@@ -106,8 +128,10 @@ def _metrics(y_true: np.ndarray, y_pred: np.ndarray, y_prob: Optional[np.ndarray
         "f1": f1_score(y_true, y_pred, zero_division=0),
     }
     if y_prob is not None:
-        with suppress(Exception): out["roc_auc"] = roc_auc_score(y_true, y_prob)
-        with suppress(Exception): out["pr_auc"] = average_precision_score(y_true, y_prob)
+        with suppress(Exception):
+            out["roc_auc"] = roc_auc_score(y_true, y_prob)
+        with suppress(Exception):
+            out["pr_auc"] = average_precision_score(y_true, y_prob)
         out.setdefault("roc_auc", float("nan"))
         out.setdefault("pr_auc", float("nan"))
     else:
@@ -116,19 +140,31 @@ def _metrics(y_true: np.ndarray, y_pred: np.ndarray, y_prob: Optional[np.ndarray
     out.update({"tn": tn, "fp": fp, "fn": fn, "tp": tp})
     return out
 
+
 # -------- Sanitize feature names for XGBoost & Stacking --------
-_BAD_CHARS = {"[": "(", "]": ")", "<": "_lt_", ">": "_gt_", "{": "(", "}": ")", "/": "_", "\\": "_", ":": "_", ";": "_", ",": "_", "=": "_"}
+_BAD_CHARS = {
+    "[": "(", "]": ")", "<": "_lt_", ">": "_gt_", "{": "(", "}": ")",
+    "/": "_", "\\": "_", ":": "_", ";": "_", ",": "_", "=": "_",
+}
+
+
 def _safe_name(name: object) -> str:
     s = str(name)
     for k, v in _BAD_CHARS.items():
         s = s.replace(k, v)
     return s.replace(" ", "_")
 
-def sanitize_df_pair(Xtr: pd.DataFrame, Xte: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame, dict[str, str]]:
+
+def sanitize_df_pair(
+    Xtr: pd.DataFrame,
+    Xte: pd.DataFrame,
+) -> tuple[pd.DataFrame, pd.DataFrame, dict[str, str]]:
+    """Samakan & sanitasi nama kolom untuk train/test."""
     ori_cols = list(Xtr.columns)
     new_cols: list[str] = []
     used: set[str] = set()
     mapping: dict[str, str] = {}
+
     for c in ori_cols:
         base = _safe_name(c)
         name = base
@@ -139,14 +175,21 @@ def sanitize_df_pair(Xtr: pd.DataFrame, Xte: pd.DataFrame) -> tuple[pd.DataFrame
         used.add(name)
         new_cols.append(name)
         mapping[str(c)] = name
-    Xtr2 = Xtr.copy(); Xtr2.columns = new_cols
+
+    Xtr2 = Xtr.copy()
+    Xtr2.columns = new_cols
     xte_cols = [mapping.get(str(c), _safe_name(c)) for c in Xte.columns]
-    Xte2 = Xte.copy(); Xte2.columns = xte_cols
+    Xte2 = Xte.copy()
+    Xte2.columns = xte_cols
     return Xtr2, Xte2, mapping
 
+
 # ---------------- Data loading ----------------
-def load_split(dataset: str, use_smote: bool, smote_variant: Optional[str] = None
-               ) -> Tuple[pd.DataFrame, pd.DataFrame, pd.Series, pd.Series]:
+def load_split(
+    dataset: str,
+    use_smote: bool,
+    smote_variant: Optional[str] = None,
+) -> Tuple[pd.DataFrame, pd.DataFrame, pd.Series, pd.Series]:
     if use_smote:
         tag = _variant_to_tag(smote_variant)
         cand = PROCESSED / f"{dataset}_train_{tag}.csv"
@@ -164,7 +207,7 @@ def load_split(dataset: str, use_smote: bool, smote_variant: Optional[str] = Non
         raise KeyError("[Stack] Target column 'tsu' not found in splits.")
 
     y_train = df_tr.pop("tsu").astype(int)
-    y_test  = df_te.pop("tsu").astype(int)
+    y_test = df_te.pop("tsu").astype(int)
 
     common = [c for c in df_tr.columns if c in df_te.columns]
     X_train, X_test = df_tr[common], df_te[common]
@@ -173,64 +216,113 @@ def load_split(dataset: str, use_smote: bool, smote_variant: Optional[str] = Non
     _log(f"[Stack] {dataset} ({mode}): X_train={X_train.shape}, X_test={X_test.shape}")
     return X_train, X_test, y_train, y_test
 
+
 # ---------------- Feature selection (opsional) ----------------
-def pearson_topn(X: pd.DataFrame, y: pd.Series, top_n: int, out_tab: Path, out_fig: Path) -> List[str]:
+def pearson_topn(
+    X: pd.DataFrame,
+    y: pd.Series,
+    top_n: int,
+    out_tab: Path,
+    out_fig: Path,
+) -> List[str]:
     num_cols = X.select_dtypes(include="number").columns
     if len(num_cols) == 0:
         _savetab(pd.DataFrame(columns=["feature", "abs_corr"]), out_tab)
         return list(X.columns)
+
     vals: List[tuple[str, float]] = []
     yv = y.to_numpy()
     for c in num_cols:
         xc = X[c].to_numpy()
         corr = 0.0 if np.nanstd(xc) == 0 else float(np.corrcoef(xc, yv)[0, 1])
-        if not np.isfinite(corr): corr = 0.0
+        if not np.isfinite(corr):
+            corr = 0.0
         vals.append((c, abs(corr)))
-    corr_df = pd.DataFrame(vals, columns=["feature", "abs_corr"]).sort_values("abs_corr", ascending=False)
+
+    corr_df = (
+        pd.DataFrame(vals, columns=["feature", "abs_corr"])
+        .sort_values("abs_corr", ascending=False)
+    )
     _savetab(corr_df, out_tab)
     top = corr_df.head(top_n)
+
     plt.figure(figsize=(8, max(3.5, 0.25 * len(top))))
     plt.barh(top["feature"][::-1], top["abs_corr"][::-1])
     plt.title(f"Top-{top_n} Pearson |corr| vs tsu")
     _savefig(out_fig)
+
     return top["feature"].tolist()
 
-def rfe_select(X: pd.DataFrame, y: pd.Series, top_n: int, out_tab: Path, out_fig: Path, random_state: int = 42) -> List[str]:
+
+def rfe_select(
+    X: pd.DataFrame,
+    y: pd.Series,
+    top_n: int,
+    out_tab: Path,
+    out_fig: Path,
+    random_state: int = 42,
+) -> List[str]:
     n = min(top_n, X.shape[1]) if X.shape[1] else 0
     if n == 0:
         _savetab(pd.DataFrame(columns=["feature", "selected"]), out_tab)
         return list(X.columns)
-    base = RandomForestClassifier(n_estimators=200, random_state=random_state,
-                                 n_jobs=-1, class_weight="balanced_subsample")
+
+    base = RandomForestClassifier(
+        n_estimators=200,
+        random_state=random_state,
+        n_jobs=-1,
+        class_weight="balanced_subsample",
+    )
     selector = RFE(base, n_features_to_select=n).fit(X, y)
     mask = selector.support_
     selected = X.columns[mask].tolist()
+
     _savetab(pd.DataFrame({"feature": X.columns, "selected": mask}), out_tab)
+
     plt.figure(figsize=(8, max(3.5, 0.25 * len(selected))))
     plt.barh(selected[::-1], np.arange(1, len(selected) + 1)[::-1])
     plt.title(f"RFE top-{n} (train)")
     _savefig(out_fig)
+
     return selected
 
-def maybe_feature_select(Xtr: pd.DataFrame, ytr: pd.Series, Xte: pd.DataFrame,
-                         dataset: str, suffix: str, method: str, top_n: int, random_state: int
-                         ) -> Tuple[pd.DataFrame, pd.DataFrame, List[str]]:
+
+def maybe_feature_select(
+    Xtr: pd.DataFrame,
+    ytr: pd.Series,
+    Xte: pd.DataFrame,
+    dataset: str,
+    suffix: str,
+    method: str,
+    top_n: int,
+    random_state: int,
+) -> Tuple[pd.DataFrame, pd.DataFrame, List[str]]:
     method = method.lower()
     if method == "pearson":
-        sel = pearson_topn(Xtr, ytr, top_n,
-                           out_tab=TAB / f"{dataset}_stack_{suffix}_pearson.csv",
-                           out_fig=FIG / f"{dataset}_stack_{suffix}_pearson.png")
+        sel = pearson_topn(
+            Xtr,
+            ytr,
+            top_n,
+            out_tab=TAB / f"{dataset}_stack_{suffix}_pearson.csv",
+            out_fig=FIG / f"{dataset}_stack_{suffix}_pearson.png",
+        )
     elif method == "rfe":
-        sel = rfe_select(Xtr, ytr, top_n,
-                         out_tab=TAB / f"{dataset}_stack_{suffix}_rfe.csv",
-                         out_fig=FIG / f"{dataset}_stack_{suffix}_rfe.png",
-                         random_state=random_state)
+        sel = rfe_select(
+            Xtr,
+            ytr,
+            top_n,
+            out_tab=TAB / f"{dataset}_stack_{suffix}_rfe.csv",
+            out_fig=FIG / f"{dataset}_stack_{suffix}_rfe.png",
+            random_state=random_state,
+        )
     else:
         return Xtr, Xte, list(Xtr.columns)
+
     Xtr_s = Xtr[sel]
     sel_test = [c for c in sel if c in Xte.columns]
     Xte_s = Xte[sel_test]
     return Xtr_s, Xte_s, sel_test
+
 
 # ---------------- Helpers (non-lambda, picklable) ----------------
 def to_np_writable(X):
@@ -239,67 +331,166 @@ def to_np_writable(X):
         arr = arr.copy()
     return arr
 
+
 # ---------------- Models ----------------
-def build_base_learners(random_state: int, with_xgb: bool, with_mlp: bool) -> List[Tuple[str, object]]:
-    """Semua base learners dikemas Pipeline. NB diberi transformer agar array writable (hindari ValueError)."""
+def build_base_learners(
+    random_state: int,
+    with_xgb: bool,
+    with_mlp: bool,
+) -> List[Tuple[str, object]]:
+    """Semua base learners dikemas Pipeline. NB diberi transformer agar array writable."""
     to_np_tf = FunctionTransformer(to_np_writable, validate=False)
 
     learners: List[Tuple[str, object]] = [
-        ("lr",  Pipeline([("scaler", StandardScaler()),
-                          ("clf", LogisticRegression(max_iter=5000, class_weight="balanced"))])),
-        ("sgd", Pipeline([("scaler", StandardScaler()),
-                          ("clf", SGDClassifier(loss="log_loss", alpha=1e-4,
-                                                class_weight="balanced",
-                                                max_iter=2000, early_stopping=True,
-                                                n_iter_no_change=5, random_state=random_state))])),
-        ("knn", Pipeline([("scaler", StandardScaler()),
-                          ("clf", KNeighborsClassifier(n_neighbors=11))])),
-        ("nb",  Pipeline([("to_np", to_np_tf),
-                          ("clf", GaussianNB())])),
-        ("dt",  DecisionTreeClassifier(random_state=random_state, class_weight="balanced")),
-        ("rf",  RandomForestClassifier(n_estimators=300, random_state=random_state,
-                                      n_jobs=-1, class_weight="balanced_subsample")),
-        ("gb",  GradientBoostingClassifier(random_state=random_state)),
+        (
+            "lr",
+            Pipeline(
+                [
+                    ("scaler", StandardScaler()),
+                    ("clf", LogisticRegression(max_iter=5000, class_weight="balanced")),
+                ]
+            ),
+        ),
+        (
+            "sgd",
+            Pipeline(
+                [
+                    ("scaler", StandardScaler()),
+                    (
+                        "clf",
+                        SGDClassifier(
+                            loss="log_loss",
+                            alpha=1e-4,
+                            class_weight="balanced",
+                            max_iter=2000,
+                            early_stopping=True,
+                            n_iter_no_change=5,
+                            random_state=random_state,
+                        ),
+                    ),
+                ]
+            ),
+        ),
+        (
+            "knn",
+            Pipeline(
+                [
+                    ("scaler", StandardScaler()),
+                    ("clf", KNeighborsClassifier(n_neighbors=11)),
+                ]
+            ),
+        ),
+        (
+            "nb",
+            Pipeline(
+                [
+                    ("to_np", to_np_tf),
+                    ("clf", GaussianNB()),
+                ]
+            ),
+        ),
+        (
+            "dt",
+            DecisionTreeClassifier(
+                random_state=random_state,
+                class_weight="balanced",
+            ),
+        ),
+        (
+            "rf",
+            RandomForestClassifier(
+                n_estimators=300,
+                random_state=random_state,
+                n_jobs=-1,
+                class_weight="balanced_subsample",
+            ),
+        ),
+        ("gb", GradientBoostingClassifier(random_state=random_state)),
     ]
+
     if with_mlp:
         with suppress(Exception):
             from sklearn.neural_network import MLPClassifier
-            learners.append(("mlp", Pipeline([
-                ("scaler", StandardScaler()),
-                ("clf", MLPClassifier(hidden_layer_sizes=(50,), max_iter=300, random_state=random_state)),
-            ])))
+
+            learners.append(
+                (
+                    "mlp",
+                    Pipeline(
+                        [
+                            ("scaler", StandardScaler()),
+                            (
+                                "clf",
+                                MLPClassifier(
+                                    hidden_layer_sizes=(50,),
+                                    max_iter=300,
+                                    random_state=random_state,
+                                ),
+                            ),
+                        ]
+                    ),
+                )
+            )
+
     if with_xgb:
         with suppress(Exception):
             from xgboost import XGBClassifier  # type: ignore
-            learners.append(("xgb", XGBClassifier(
-                n_estimators=200, learning_rate=0.08, max_depth=5,
-                subsample=0.9, colsample_bytree=0.9,
-                eval_metric="logloss", random_state=random_state, n_jobs=-1,
-                tree_method="hist",
-            )))
+
+            learners.append(
+                (
+                    "xgb",
+                    XGBClassifier(
+                        n_estimators=200,
+                        learning_rate=0.08,
+                        max_depth=5,
+                        subsample=0.9,
+                        colsample_bytree=0.9,
+                        eval_metric="logloss",
+                        random_state=random_state,
+                        n_jobs=-1,
+                        tree_method="hist",
+                    ),
+                )
+            )
+
     return learners
 
-def build_stacking(base_learners: List[Tuple[str, object]], cv: int) -> StackingClassifier:
-    """n_jobs=1 untuk menghindari memmap read-only di proses paralel yang memicu WRITEABLE error."""
+
+def build_stacking(
+    base_learners: List[Tuple[str, object]],
+    cv: int,
+    passthrough: bool,
+) -> StackingClassifier:
+    """n_jobs=1 menghindari isu memmap WRITEABLE di proses paralel."""
     return StackingClassifier(
         estimators=base_learners,
         final_estimator=LogisticRegression(max_iter=8000, class_weight="balanced"),
         cv=cv,
-        passthrough=True,
+        passthrough=passthrough,
         stack_method="predict_proba",
         n_jobs=1,
     )
 
+
 # ---------------- Threshold tuning ----------------
-def _f_beta(y_true: np.ndarray, y_prob: np.ndarray, thr: float, beta: float) -> Tuple[float, float, float]:
+def _f_beta(
+    y_true: np.ndarray,
+    y_prob: np.ndarray,
+    thr: float,
+    beta: float,
+) -> Tuple[float, float, float]:
     y_pred = (y_prob >= thr).astype(int)
     prec = precision_score(y_true, y_pred, zero_division=0)
     rec = recall_score(y_true, y_pred, zero_division=0)
     if prec == 0 and rec == 0:
         return 0.0, prec, rec
     b2 = beta ** 2
-    fbeta = (1 + b2) * (prec * rec) / (b2 * prec + rec) if (b2 * prec + rec) > 0 else 0.0
+    fbeta = (
+        (1 + b2) * (prec * rec) / (b2 * prec + rec)
+        if (b2 * prec + rec) > 0
+        else 0.0
+    )
     return fbeta, prec, rec
+
 
 def _plot_thr_sweep(df: pd.DataFrame, thr: float, title: str, out_png: Path) -> None:
     plt.figure(figsize=(6.4, 4.2))
@@ -308,9 +499,11 @@ def _plot_thr_sweep(df: pd.DataFrame, thr: float, title: str, out_png: Path) -> 
     plt.plot(df["threshold"], df["recall"], label="Recall")
     plt.axvline(thr, linestyle="--")
     plt.title(title or "Threshold sweep")
-    plt.xlabel("Threshold"); plt.ylabel("Score")
+    plt.xlabel("Threshold")
+    plt.ylabel("Score")
     plt.legend()
     _savefig(out_png)
+
 
 def find_best_threshold(
     y_true: np.ndarray,
@@ -345,68 +538,258 @@ def find_best_threshold(
         _plot_thr_sweep(df, thr, title, out_png)
     return thr
 
+
 # ---------------- Plots ----------------
 def plot_confusion(y_true: np.ndarray, y_pred: np.ndarray, title: str, out_png: Path) -> None:
     cm = confusion_matrix(y_true, y_pred, labels=[0, 1])
     plt.figure(figsize=(4.8, 4.2))
     plt.imshow(cm, interpolation="nearest")
-    plt.title(title); plt.xticks([0, 1], ["Pred 0", "Pred 1"]); plt.yticks([0, 1], ["True 0", "True 1"])
-    for (i, j), v in np.ndenumerate(cm): plt.text(j, i, int(v), ha="center", va="center", fontweight="bold")
-    plt.xlabel("Predicted"); plt.ylabel("Actual"); _savefig(out_png)
+    plt.title(title)
+    plt.xticks([0, 1], ["Pred 0", "Pred 1"])
+    plt.yticks([0, 1], ["True 0", "True 1"])
+    for (i, j), v in np.ndenumerate(cm):
+        plt.text(j, i, int(v), ha="center", va="center", fontweight="bold")
+    plt.xlabel("Predicted")
+    plt.ylabel("Actual")
+    _savefig(out_png)
+
 
 def plot_roc(y_true: np.ndarray, y_prob: np.ndarray, title: str, out_png: Path) -> None:
     fpr, tpr, _ = roc_curve(y_true, y_prob)
-    plt.figure(figsize=(5.6, 4.2)); plt.plot(fpr, tpr); plt.plot([0, 1], [0, 1], "--")
-    plt.title(title); plt.xlabel("False Positive Rate"); plt.ylabel("True Positive Rate"); _savefig(out_png)
+    plt.figure(figsize=(5.6, 4.2))
+    plt.plot(fpr, tpr)
+    plt.plot([0, 1], [0, 1], "--")
+    plt.title(title)
+    plt.xlabel("False Positive Rate")
+    plt.ylabel("True Positive Rate")
+    _savefig(out_png)
+
 
 def plot_pr(y_true: np.ndarray, y_prob: np.ndarray, title: str, out_png: Path) -> None:
     precision, recall, _ = precision_recall_curve(y_true, y_prob)
-    plt.figure(figsize=(5.6, 4.2)); plt.plot(recall, precision)
-    plt.title(title); plt.xlabel("Recall"); plt.ylabel("Precision"); _savefig(out_png)
+    plt.figure(figsize=(5.6, 4.2))
+    plt.plot(recall, precision)
+    plt.title(title)
+    plt.xlabel("Recall")
+    plt.ylabel("Precision")
+    _savefig(out_png)
+
+
+# ---------- Hyperparameter & arsitektur helpers ----------
+def _append_hyperparam_rows(
+    hyper_rows: List[Dict[str, str]],
+    dataset: str,
+    suffix: str,
+    base_learners: List[Tuple[str, object]],
+    stack: StackingClassifier,
+) -> None:
+    """Tambahkan ringkasan hyperparams ke list untuk disimpan ke CSV."""
+    variant = suffix
+
+    # gunakan extend + comprehension (menghindari warning 'for-append loop')
+    hyper_rows.extend(
+        {
+            "dataset": dataset,
+            "variant": variant,
+            "role": "base",
+            "name": name,
+            "model_class": est.__class__.__name__,
+            "description": repr(est),
+        }
+        for name, est in base_learners
+    )
+
+    hyper_rows.append(
+        {
+            "dataset": dataset,
+            "variant": variant,
+            "role": "meta",
+            "name": "stacking_lr_meta",
+            "model_class": stack.__class__.__name__,
+            "description": repr(stack.final_estimator),
+        }
+    )
+
+
+def plot_stacking_architecture(model_names: List[str], out_png: Path) -> None:
+    """
+    Gambar arsitektur stacking sederhana:
+    beberapa base learner → 1 meta-learner (Logistic Regression).
+    """
+    if not model_names:
+        return
+
+    fig, ax = plt.subplots(figsize=(7.0, 3.5 + 0.25 * len(model_names)))
+    ax.set_xlim(0, 1)
+    ax.set_ylim(0, 1)
+    ax.axis("off")
+
+    box_w, box_h = 0.32, 0.06
+    top_y = 0.9
+    spacing = 0.08
+
+    # Base learners di sisi kiri
+    centers_y: List[float] = []
+    for i, name in enumerate(model_names):
+        y = top_y - i * spacing
+        centers_y.append(y + box_h / 2)
+        rect = FancyBboxPatch(
+            (0.05, y),
+            box_w,
+            box_h,
+            boxstyle="round,pad=0.02",
+            edgecolor="black",
+            facecolor="#e0f0ff",
+        )
+        ax.add_patch(rect)
+        ax.text(
+            0.05 + box_w / 2,
+            y + box_h / 2,
+            name.upper(),
+            ha="center",
+            va="center",
+            fontsize=9,
+        )
+
+    # Meta-learner di kanan
+    meta_x = 0.6
+    meta_y = 0.5
+    meta_rect = FancyBboxPatch(
+        (meta_x, meta_y - box_h / 2),
+        box_w,
+        box_h,
+        boxstyle="round,pad=0.02",
+        edgecolor="black",
+        facecolor="#ffe0e0",
+    )
+    ax.add_patch(meta_rect)
+    ax.text(
+        meta_x + box_w / 2,
+        meta_y,
+        "META-LEARNER\n(Logistic Regression)",
+        ha="center",
+        va="center",
+        fontsize=9,
+    )
+
+    # Panah dari base → meta
+    for cy in centers_y:
+        arrow = FancyArrowPatch(
+            (0.05 + box_w, cy),
+            (meta_x, meta_y),
+            arrowstyle="->",
+            mutation_scale=10,
+            linewidth=1.0,
+        )
+        ax.add_patch(arrow)
+
+    ax.text(
+        0.5,
+        0.1,
+        "Stacking Ensemble: base learners menghasilkan prediksi / proba,\n"
+        "yang kemudian menjadi input bagi meta-learner.",
+        ha="center",
+        va="center",
+        fontsize=9,
+    )
+
+    _savefig(out_png)
+
+
+def make_runtime_summary(ablation_rows: List[Dict[str, float]]) -> None:
+    """Buat reports/tables/runtime_summary.csv dari ablation_rows."""
+    if not ablation_rows:
+        return
+    df = pd.DataFrame(ablation_rows)
+    cols = [
+        "dataset",
+        "use_smote",
+        "variant",
+        "stack_fit_sec",
+        "grid_sec",
+        "run_sec",
+        "thr",
+        "beta",
+    ]
+    cols = [c for c in cols if c in df.columns]
+    df_out = df[cols].copy()
+    _savetab(df_out, TAB / "runtime_summary.csv")
+
 
 # ---------------- Train & Eval ----------------
 def fit_and_eval_single(name: str, clf, Xtr, ytr, Xte, yte) -> Dict[str, float]:
-    t0 = time.time(); _log(f"[Stack]   > Fit {name} …")
-    model = clone(clf); model.fit(Xtr, ytr)
-    pred = model.predict(Xte); prob = _safe_proba(model, Xte)
-    m = _metrics(yte, pred, prob); m["model"] = name
+    t0 = time.time()
+    _log(f"[Stack]   > Fit {name} …")
+    model = clone(clf)
+    model.fit(Xtr, ytr)
+    pred = model.predict(Xte)
+    prob = _safe_proba(model, Xte)
+    m = _metrics(yte, pred, prob)
+    m["model"] = name
     m["fit_sec"] = round(time.time() - t0, 3)
     _log(f"[Stack]   > Done {name} in {m['fit_sec']:.2f}s | f1={m['f1']:.3f} rec={m['recall']:.3f}")
     return m
 
+
 def run_one(
-    dataset: str, use_smote: bool, smote_variant: Optional[str],
-    cv: int, random_state: int, with_xgb: bool, with_mlp: bool,
-    fast_sample: Optional[int], feature_select: str, top_n: int, meta_grid: bool,
+    dataset: str,
+    use_smote: bool,
+    smote_variant: Optional[str],
+    cv: int,
+    random_state: int,
+    with_xgb: bool,
+    with_mlp: bool,
+    fast_sample: Optional[int],
+    feature_select: str,
+    top_n: int,
+    meta_grid: bool,
+    hyper_rows: Optional[List[Dict[str, str]]] = None,
 ) -> Dict[str, float]:
     start_run = time.time()
     suffix = _variant_to_tag(smote_variant) if use_smote else "nosmote"
     _log(f"[Stack] Start -> {dataset} ({suffix})")
 
     p_metrics = TAB / f"{dataset}_stack_{suffix}_metrics.csv"
-    p_preds   = TAB / f"{dataset}_stack_{suffix}_preds.csv"
-    p_cm_png  = FIG / f"{dataset}_stack_{suffix}_cm.png"
-    p_cm_tab  = TAB / f"{dataset}_stack_{suffix}_cm.csv"
-    p_roc     = FIG / f"{dataset}_stack_{suffix}_roc.png"
-    p_pr      = FIG / f"{dataset}_stack_{suffix}_pr.png"
+    p_preds = TAB / f"{dataset}_stack_{suffix}_preds.csv"
+    p_cm_png = FIG / f"{dataset}_stack_{suffix}_cm.png"
+    p_cm_tab = TAB / f"{dataset}_stack_{suffix}_cm.csv"
+    p_roc = FIG / f"{dataset}_stack_{suffix}_roc.png"
+    p_pr = FIG / f"{dataset}_stack_{suffix}_pr.png"
     p_thr_csv = TAB / f"{dataset}_stack_{suffix}_thr_sweep.csv"
     p_thr_png = FIG / f"{dataset}_stack_{suffix}_thr_sweep.png"
-    p_model   = ART / f"{dataset}_stack_{suffix}.joblib"
+    p_model = ART / f"{dataset}_stack_{suffix}.joblib"
 
-    Xtr, Xte, ytr, yte = load_split(dataset, use_smote=use_smote, smote_variant=smote_variant)
+    Xtr, Xte, ytr, yte = load_split(
+        dataset,
+        use_smote=use_smote,
+        smote_variant=smote_variant,
+    )
 
-    # sanitasi nama kolom (untuk XGB & konsistensi)
+    # sanitasi nama kolom
     Xtr, Xte, name_map = sanitize_df_pair(Xtr, Xte)
 
     if fast_sample is not None and len(Xtr) > fast_sample:
         _log(f"[Stack]   > FAST mode sample {fast_sample}/{len(Xtr)}")
         idx = np.random.RandomState(42).choice(len(Xtr), size=fast_sample, replace=False)
-        Xtr = Xtr.iloc[idx]; ytr = ytr.iloc[idx]
+        Xtr = Xtr.iloc[idx]
+        ytr = ytr.iloc[idx]
 
-    Xtr, Xte, sel_cols = maybe_feature_select(Xtr, ytr, Xte, dataset, suffix, feature_select, top_n, random_state)
+    Xtr, Xte, sel_cols = maybe_feature_select(
+        Xtr,
+        ytr,
+        Xte,
+        dataset,
+        suffix,
+        feature_select,
+        top_n,
+        random_state,
+    )
 
     base_learners = build_base_learners(random_state, with_xgb, with_mlp)
-    stack = build_stacking(base_learners, cv)
+    is_volc = dataset.lower() == "volcanic"
+
+    # volcanic: passthrough dimatikan agar meta-learner lebih stabil
+    stack = build_stacking(base_learners, cv, passthrough=(not is_volc))
 
     grid_sec = 0.0
     best_meta = None
@@ -417,97 +800,173 @@ def run_one(
             "final_estimator__solver": ["lbfgs", "liblinear"],
         }
         t_grid = time.time()
-        grid = GridSearchCV(stack, param_grid=param_grid, scoring="roc_auc", cv=cv, n_jobs=1, verbose=1)
+        grid = GridSearchCV(
+            stack,
+            param_grid=param_grid,
+            scoring="roc_auc",
+            cv=cv,
+            n_jobs=1,
+            verbose=1,
+        )
         grid.fit(Xtr, ytr)
         grid_sec = round(time.time() - t_grid, 3)
         best_meta = getattr(grid, "best_params_", None)
         _log(f"[Stack]   > Meta-grid done in {grid_sec:.2f}s | best={best_meta}")
         stack = grid.best_estimator_
 
-    # --- Base learners (waktu per-model ikut ke metrics.csv) ---
-    rows = [fit_and_eval_single(name, est, Xtr, ytr, Xte, yte) for name, est in base_learners]
+    # catat hyperparams final (setelah meta_grid) untuk tabel global
+    if hyper_rows is not None:
+        _append_hyperparam_rows(hyper_rows, dataset, suffix, base_learners, stack)
 
-    # --- Stacking: fit, proba test, threshold tuning (OOF) ---
+    # --- Base learners (tulis waktu/performanya ke metrics.csv)
+    rows: List[Dict[str, float]] = [
+        fit_and_eval_single(name, est, Xtr, ytr, Xte, yte)
+        for name, est in base_learners
+    ]
+
+    # --- Fit stacking + OOF prob untuk threshold
     _log("[Stack]   > Fit Stacking …")
     t0 = time.time()
     stack.fit(Xtr, ytr)
-    # Prob test
     y_prob_test = _safe_proba(stack, Xte)
-    # OOF prob untuk cari threshold (lebih aman dari pada pakai test)
+
     _log("[Stack]   > Cross-val predict for threshold …")
     with suppress(Exception):
-        oof = cross_val_predict(stack, Xtr, ytr, method="predict_proba", cv=cv)
+        oof = cross_val_predict(
+            stack,
+            Xtr,
+            ytr,
+            method="predict_proba",
+            cv=cv,
+            n_jobs=1,
+        )
         y_prob_oof = oof[:, 1] if oof.ndim == 2 else oof
+
     if "y_prob_oof" not in locals():
         _log("[WARN] cross_val_predict failed; fallback: in-sample prob for threshold")
         y_prob_oof = _safe_proba(stack, Xtr)
 
-    # Dataset-specific preference: volcanic lebih pro-recall
-    beta = 2.0 if dataset.lower() == "volcanic" else 1.0
-    min_prec = 0.50 if dataset.lower() == "volcanic" else None
+    # ---------- Threshold policy ----------
+    if is_volc:
+        beta = 0.75       # tekankan precision
+        min_prec = 0.88   # minimal precision untuk pilihan threshold
+    else:
+        beta = 1.0
+        min_prec = None   # tectonic: seimbang
+
     thr = find_best_threshold(
-        ytr.to_numpy(), y_prob_oof, beta=beta, min_precision=min_prec,
+        ytr.to_numpy(),
+        y_prob_oof,
+        beta=beta,
+        min_precision=min_prec,
         title=f"{dataset.title()} ({suffix}) Threshold sweep (beta={beta})",
-        out_csv=p_thr_csv, out_png=p_thr_png,
+        out_csv=p_thr_csv,
+        out_png=p_thr_png,
     )
     _log(f"[Stack]   > Best threshold = {thr:.3f} (beta={beta}, min_precision={min_prec})")
 
     # Prediksi test memakai threshold terbaik
     y_pred = (y_prob_test >= thr).astype(int)
-    m_stack = _metrics(yte.to_numpy(), y_pred, y_prob_test); m_stack["model"] = "stacking_lr_meta"
+    m_stack = _metrics(yte.to_numpy(), y_pred, y_prob_test)
+    m_stack["model"] = "stacking_lr_meta"
     m_stack["fit_sec"] = round(time.time() - t0, 3)
     m_stack["grid_sec"] = grid_sec
     rows.append(m_stack)
-    _log(f"[Stack]   > Done Stacking in {m_stack['fit_sec']:.2f}s | f1={m_stack['f1']:.3f} rec={m_stack['recall']:.3f}")
+    _log(
+        f"[Stack]   > Done Stacking in {m_stack['fit_sec']:.2f}s | "
+        f"f1={m_stack['f1']:.3f} rec={m_stack['recall']:.3f}"
+    )
 
     # --- Tabel metrics lengkap (+fit_sec) ---
     metrics_df = pd.DataFrame(rows)
     if {"f1", "recall", "roc_auc"} <= set(metrics_df.columns):
-        metrics_df = metrics_df.sort_values(["f1", "recall", "roc_auc"], ascending=False)
+        metrics_df = metrics_df.sort_values(
+            ["f1", "recall", "roc_auc"],
+            ascending=False,
+        )
     _savetab(metrics_df, p_metrics)
 
     # --- Simpan preds ---
-    preds_df = pd.DataFrame({"y_true": yte, "y_pred": y_pred, "y_prob": y_prob_test})
+    preds_df = pd.DataFrame(
+        {"y_true": yte, "y_pred": y_pred, "y_prob": y_prob_test}
+    )
     _savetab(preds_df, p_preds)
 
     # --- Confusion matrix: gambar + tabel CSV ---
     cm = confusion_matrix(yte.to_numpy(), y_pred, labels=[0, 1])
     plot_confusion(yte.to_numpy(), y_pred, f"{dataset.title()} - {suffix}", p_cm_png)
-    cm_df = pd.DataFrame(cm, index=["True 0", "True 1"], columns=["Pred 0", "Pred 1"])
+    cm_df = pd.DataFrame(
+        cm,
+        index=["True 0", "True 1"],
+        columns=["Pred 0", "Pred 1"],
+    )
     _savetab(cm_df, p_cm_tab)
 
     # --- ROC & PR curve (berdasarkan prob test) ---
     with suppress(Exception):
-        plot_roc(yte.to_numpy(), y_prob_test, f"{dataset.title()} - ROC ({suffix})", p_roc)
-        plot_pr(yte.to_numpy(), y_prob_test, f"{dataset.title()} - PR ({suffix})", p_pr)
+        plot_roc(
+            yte.to_numpy(),
+            y_prob_test,
+            f"{dataset.title()} - ROC ({suffix})",
+            p_roc,
+        )
+        plot_pr(
+            yte.to_numpy(),
+            y_prob_test,
+            f"{dataset.title()} - PR ({suffix})",
+            p_pr,
+        )
 
     # --- Simpan artifact model + metadata waktu + threshold ---
     run_sec = round(time.time() - start_run, 3)
-    dump({
-        "model": stack,
-        "feature_columns": list(Xtr.columns),
-        "selected_columns": sel_cols,
-        "feature_select": feature_select,
-        "col_name_map": name_map,
-        "sanitized_feature_names": True,
-        "decision_threshold": float(thr),
-        "runtime": {"stack_fit_sec": m_stack["fit_sec"], "grid_sec": grid_sec, "run_sec": run_sec},
-        "meta": {"dataset": dataset, "use_smote": use_smote, "smote_variant": smote_variant,
-                 "cv": cv, "random_state": random_state, "best_meta": best_meta,
-                 "beta": beta, "min_precision": min_prec},
-    }, p_model, compress=3)
+    dump(
+        {
+            "model": stack,
+            "feature_columns": list(Xtr.columns),
+            "selected_columns": sel_cols,
+            "feature_select": feature_select,
+            "col_name_map": name_map,
+            "sanitized_feature_names": True,
+            "decision_threshold": float(thr),
+            "runtime": {
+                "stack_fit_sec": m_stack["fit_sec"],
+                "grid_sec": grid_sec,
+                "run_sec": run_sec,
+            },
+            "meta": {
+                "dataset": dataset,
+                "use_smote": use_smote,
+                "smote_variant": smote_variant,
+                "cv": cv,
+                "random_state": random_state,
+                "best_meta": best_meta,
+                "beta": beta,
+                "min_precision": min_prec,
+            },
+        },
+        p_model,
+        compress=3,
+    )
 
     # --- Nilai untuk ablation_smote.csv (ringkas) ---
     return {
         "dataset": dataset,
         "use_smote": use_smote,
         "variant": _variant_to_tag(smote_variant) if use_smote else "",
-        "accuracy": m_stack["accuracy"], "precision": m_stack["precision"],
-        "recall": m_stack["recall"], "f1": m_stack["f1"],
-        "roc_auc": m_stack["roc_auc"], "pr_auc": m_stack["pr_auc"], "fn": m_stack["fn"],
-        "stack_fit_sec": m_stack["fit_sec"], "grid_sec": grid_sec, "run_sec": run_sec,
-        "thr": float(thr), "beta": beta,
+        "accuracy": m_stack["accuracy"],
+        "precision": m_stack["precision"],
+        "recall": m_stack["recall"],
+        "f1": m_stack["f1"],
+        "roc_auc": m_stack["roc_auc"],
+        "pr_auc": m_stack["pr_auc"],
+        "fn": m_stack["fn"],
+        "stack_fit_sec": m_stack["fit_sec"],
+        "grid_sec": grid_sec,
+        "run_sec": run_sec,
+        "thr": float(thr),
+        "beta": beta,
     }
+
 
 # ---------------- CLI ----------------
 def main():
@@ -518,73 +977,140 @@ def main():
 
     # Toggles: default = ON; bisa dimatikan dengan --no-xgb / --no-meta-grid
     ap.add_argument("--with-xgb", dest="with_xgb", action="store_true")
-    ap.add_argument("--no-xgb",  dest="with_xgb", action="store_false")
+    ap.add_argument("--no-xgb", dest="with_xgb", action="store_false")
     ap.set_defaults(with_xgb=True)
 
-    ap.add_argument("--meta-grid",    dest="meta_grid", action="store_true")
+    ap.add_argument("--meta-grid", dest="meta_grid", action="store_true")
     ap.add_argument("--no-meta-grid", dest="meta_grid", action="store_false")
     ap.set_defaults(meta_grid=True)
 
     ap.add_argument("--with-mlp", action="store_true")
-    ap.add_argument("--fast", action="store_true", help="subsample training rows for fast debugging")
+    ap.add_argument(
+        "--fast",
+        action="store_true",
+        help="subsample training rows for fast debugging",
+    )
     ap.add_argument("--fast-n", type=int, default=5000)
-    ap.add_argument("--feature-select", choices=["none","pearson","rfe"], default="none")
+    ap.add_argument(
+        "--feature-select",
+        choices=["none", "pearson", "rfe"],
+        default="none",
+    )
     ap.add_argument("--top-n", type=int, default=30)
-    ap.add_argument("--ablation", action="store_true",
-                    help="run non-SMOTE + SMOTE + SMOTE_TOMEK + SMOTEENN and write ablation_smote.csv")
-    ap.add_argument("--use-smote", choices=["auto","yes","no"], default="auto")
+    ap.add_argument(
+        "--ablation",
+        action="store_true",
+        help="run non-SMOTE + SMOTE + SMOTE_TOMEK + SMOTEENN and write ablation_smote.csv",
+    )
+    ap.add_argument(
+        "--use-smote",
+        choices=["auto", "yes", "no"],
+        default="auto",
+    )
     args = ap.parse_args()
 
-    with_xgb  = args.with_xgb
+    with_xgb = args.with_xgb
     meta_grid = args.meta_grid
     fast_n = args.fast_n if args.fast else None
 
     _log("[Stack] Pipeline start …")
+
     ablation_rows: List[Dict[str, float]] = []
+    hyper_rows: List[Dict[str, str]] = []
+
+    # Buat diagram arsitektur stacking sekali saja (pakai konfigurasi base learner default)
+    example_learners = build_base_learners(args.random_state, with_xgb, args.with_mlp)
+    plot_stacking_architecture(
+        [name for name, _ in example_learners],
+        FIG / "stacking_architecture.png",
+    )
 
     for ds in args.datasets:
         if args.ablation:
             # non-SMOTE
-            ablation_rows.append(run_one(
-                ds, use_smote=False, smote_variant=None,
-                cv=args.cv, random_state=args.random_state,
-                with_xgb=with_xgb, with_mlp=args.with_mlp,
-                fast_sample=fast_n, feature_select=args.feature_select,
-                top_n=args.top_n, meta_grid=meta_grid,
-            ))
+            ablation_rows.append(
+                run_one(
+                    ds,
+                    use_smote=False,
+                    smote_variant=None,
+                    cv=args.cv,
+                    random_state=args.random_state,
+                    with_xgb=with_xgb,
+                    with_mlp=args.with_mlp,
+                    fast_sample=fast_n,
+                    feature_select=args.feature_select,
+                    top_n=args.top_n,
+                    meta_grid=meta_grid,
+                    hyper_rows=hyper_rows,
+                )
+            )
             # semua varian SMOTE (cek file)
             for var in SMOTE_VARIANTS:
                 tag = _variant_to_tag(var)
                 csv_path = PROCESSED / f"{ds}_train_{tag}.csv"
                 if not csv_path.exists():
-                    _log(f"[WARN] {csv_path.name} not found, skip {var} for {ds}."); continue
-                ablation_rows.append(run_one(
-                    ds, use_smote=True, smote_variant=var,
-                    cv=args.cv, random_state=args.random_state,
-                    with_xgb=with_xgb, with_mlp=args.with_mlp,
-                    fast_sample=fast_n, feature_select=args.feature_select,
-                    top_n=args.top_n, meta_grid=meta_grid,
-                ))
+                    _log(f"[WARN] {csv_path.name} not found, skip {var} for {ds}.")
+                    continue
+                ablation_rows.append(
+                    run_one(
+                        ds,
+                        use_smote=True,
+                        smote_variant=var,
+                        cv=args.cv,
+                        random_state=args.random_state,
+                        with_xgb=with_xgb,
+                        with_mlp=args.with_mlp,
+                        fast_sample=fast_n,
+                        feature_select=args.feature_select,
+                        top_n=args.top_n,
+                        meta_grid=meta_grid,
+                        hyper_rows=hyper_rows,
+                    )
+                )
         else:
             if args.use_smote == "auto":
-                use_sm = (PROCESSED / f"{ds}_train_{_variant_to_tag('smote')}.csv").exists() \
-                         or (PROCESSED / f"{ds}_train_smote.csv").exists()
+                use_sm = (
+                    (PROCESSED / f"{ds}_train_{_variant_to_tag('smote')}.csv").exists()
+                    or (PROCESSED / f"{ds}_train_smote.csv").exists()
+                )
             else:
                 use_sm = args.use_smote == "yes"
+
             var = "smote" if use_sm else None
-            ablation_rows.append(run_one(
-                ds, use_smote=use_sm, smote_variant=var,
-                cv=args.cv, random_state=args.random_state,
-                with_xgb=with_xgb, with_mlp=args.with_mlp,
-                fast_sample=fast_n, feature_select=args.feature_select,
-                top_n=args.top_n, meta_grid=meta_grid,
-            ))
+            ablation_rows.append(
+                run_one(
+                    ds,
+                    use_smote=use_sm,
+                    smote_variant=var,
+                    cv=args.cv,
+                    random_state=args.random_state,
+                    with_xgb=with_xgb,
+                    with_mlp=args.with_mlp,
+                    fast_sample=fast_n,
+                    feature_select=args.feature_select,
+                    top_n=args.top_n,
+                    meta_grid=meta_grid,
+                    hyper_rows=hyper_rows,
+                )
+            )
 
+    # ====== OUTPUT RINGKASAN GLOBAL ======
     if ablation_rows:
-        _savetab(pd.DataFrame(ablation_rows), TAB / "ablation_smote.csv")
-        _log(f"[Stack] ablation_smote.csv written to {TAB}")
+        ablation_df = pd.DataFrame(ablation_rows)
+        _savetab(ablation_df, TAB / "ablation_smote.csv")
+        make_runtime_summary(ablation_rows)
+        _log(f"[Stack] ablation_smote.csv & runtime_summary.csv written to {TAB}")
 
-    _log(f"[DONE] Stacking pipeline finished.\n - FIG: {FIG}\n - TAB: {TAB}\n - ART: {ART}\n - DATA: {PROCESSED}")
+    if hyper_rows:
+        hyper_df = pd.DataFrame(hyper_rows)
+        _savetab(hyper_df, TAB / "model_hyperparams.csv")
+        _log(f"[Stack] model_hyperparams.csv written to {TAB}")
+
+    _log(
+        f"[DONE] Stacking pipeline finished.\n"
+        f" - FIG: {FIG}\n - TAB: {TAB}\n - ART: {ART}\n - DATA: {PROCESSED}"
+    )
+
 
 if __name__ == "__main__":
     main()
