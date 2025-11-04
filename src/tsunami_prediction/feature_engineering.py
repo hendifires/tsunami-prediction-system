@@ -146,7 +146,7 @@ def add_subduction_flag(df: pd.DataFrame) -> pd.DataFrame:
 
 # ---- helper terpisah (menghapus warning “extract method”) ----
 def _distance_to_coast_with_gpd(df: pd.DataFrame, coast_path: str) -> pd.DataFrame:
-    """Hitung jarak ke garis pantai dengan GeoPandas/Shapely (EPSG:4326→3857)."""
+    """Hitung jarak ke garis pantai dengan GeoPandas/Shapely (EPSG:4326->3857)."""
     import geopandas as gpd  # type: ignore
     from shapely.geometry import Point  # type: ignore
 
@@ -404,7 +404,12 @@ def pearson_topn(
     out_png: Path,
     out_csv: Path,
 ):
-    num_cols = [c for c in df.select_dtypes(include="number").columns if c != target]
+    # kecualikan kolom id dari perhitungan korelasi
+    num_cols = [
+        c
+        for c in df.select_dtypes(include="number").columns
+        if c not in {target, "id"}
+    ]
     corr = df[num_cols].corrwith(df[target]).abs().sort_values(ascending=False)
     _savetab(
         corr.rename("abs_corr")
@@ -437,8 +442,12 @@ def rfe_select(
     if target not in df.columns:
         print(f"[RFE] {title}: target '{target}' tidak ada, skip.")
         return []
-    X = df.drop(columns=[target])
+
+    # buang target dan kolom id (id tidak dipakai sebagai fitur model)
+    drop_cols = [target] + (["id"] if "id" in df.columns else [])
+    X = df.drop(columns=drop_cols)
     y = df[target].astype(int)
+
     if X.shape[1] > max_cols:
         var = X.var(numeric_only=True).sort_values(ascending=False)
         keep = var.index[:max_cols]

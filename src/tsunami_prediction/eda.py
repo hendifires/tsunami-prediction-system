@@ -566,7 +566,7 @@ def run_full_eda(df: pd.DataFrame, ds_name: str, target: str = "tsu") -> None:
     (TAB / f"{ds_name}_info.txt").write_text(_info_to_txt(df), encoding="utf-8")
     _savetab(df.head(20), TAB / f"{ds_name}_head20.csv")
     _savetab(
-        df.describe(include="all").T.reset_index().rename(columns={"index": "feature"}),
+        df.describe(include="all").T.reset_index().rename(columns={"index": "feature"}),  # noqa: E501
         TAB / f"{ds_name}_describe.csv",
     )
 
@@ -574,11 +574,11 @@ def run_full_eda(df: pd.DataFrame, ds_name: str, target: str = "tsu") -> None:
     if "mo" in df.columns or "dy" in df.columns:
         df = df.rename(columns={"mo": "month", "dy": "day"})
 
-    # daftar kolom numerik (tanpa target)
+    # daftar kolom numerik (tanpa target & tanpa id)
     numeric_cols = [
         c
         for c in df.columns
-        if pd.api.types.is_numeric_dtype(df[c]) and c != target
+        if pd.api.types.is_numeric_dtype(df[c]) and c not in {target, "id"}
     ]
 
     class_distribution(df, target, ds_name)
@@ -602,7 +602,7 @@ def run_full_eda(df: pd.DataFrame, ds_name: str, target: str = "tsu") -> None:
     else:
         numeric_vs_target_distributions(
             df,
-            cols=["eq", "elevation", "latitude"],
+            cols=["eq", "elevation", "latitude", "longitude"],
             target=target,
             name=ds_name,
             outfile="volcanic_num_vs_tsu.png",
