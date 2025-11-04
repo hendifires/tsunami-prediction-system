@@ -1,5 +1,5 @@
-# src/tsunami_prediction/eda.py
 from __future__ import annotations
+# cSpell:ignore whitegrid savetab
 
 import argparse
 from pathlib import Path
@@ -22,19 +22,19 @@ FIG = REPORTS / "figures"
 
 
 # ---------- UTIL ----------
-def _ensure_dirs():
-    for p in [TAB, FIG]:
+def _ensure_dirs() -> None:
+    for p in (TAB, FIG):
         p.mkdir(parents=True, exist_ok=True)
 
 
-def _savefig(path: Path):
+def _savefig(path: Path) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     plt.tight_layout()
     plt.savefig(path, dpi=200, bbox_inches="tight")
     plt.close()
 
 
-def _savetab(df: pd.DataFrame, path: Path):
+def _savetab(df: pd.DataFrame, path: Path) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     df.to_csv(path, index=False)
 
@@ -47,29 +47,33 @@ def _info_to_txt(df: pd.DataFrame) -> str:
 
 def _load_dataset(name: str) -> pd.DataFrame:
     """
-    Prioritaskan hasil 'clean' (bukan preprocessed) agar kolom asli masih ada.
-    Pastikan juga kolom unik (hapus duplikat nama kolom bila ada).
+    Ambil dataset hasil preprocessing/cleaning (bukan hasil FE).
+    Pastikan tidak ada duplikat nama kolom.
     """
-    cands = [
-        PROCESSED / f"{name}.csv",                 # hasil cleaning
-        PROCESSED / f"{name}_cleaned.csv",         # fallback lama
-        PROCESSED / f"{name}_biner.csv",           # fallback lama
-        PROCESSED / f"{name}_preprocessed.csv",    # kalau hanya ini yang ada
+    candidates = [
+        PROCESSED / f"{name}.csv",               # hasil cleaning utama
+        PROCESSED / f"{name}_cleaned.csv",       # fallback lama
+        PROCESSED / f"{name}_biner.csv",         # fallback lama
+        PROCESSED / f"{name}_preprocessed.csv",  # fallback lain
     ]
-    for p in cands:
+    for p in candidates:
         if p.exists():
             df = pd.read_csv(p)
             df = df.loc[:, ~df.columns.duplicated()].copy()
             return df
-    raise FileNotFoundError(f"[EDA] Processed dataset not found for '{name}'. Tried: {cands}")
+    raise FileNotFoundError(
+        f"[EDA] Processed dataset not found for '{name}'. Tried: {candidates}"
+    )
 
 
 # ---------- EDA PRIMITIVES ----------
-def class_distribution(df: pd.DataFrame, target: str, name: str):
+def class_distribution(df: pd.DataFrame, target: str, name: str) -> None:
     if target not in df.columns:
         raise KeyError(f"[{name}] Target column '{target}' tidak ditemukan.")
+
     ct = (
-        df[target].value_counts(dropna=False)
+        df[target]
+        .value_counts(dropna=False)
         .rename_axis(target)
         .reset_index(name="count")
         .sort_values(target)
@@ -87,13 +91,16 @@ def class_distribution(df: pd.DataFrame, target: str, name: str):
 
     # pie
     plt.figure(figsize=(4.2, 4.2))
-    labels = [f"{int(v)} ({p:.1f}%)" for v, p in zip(ct["count"].values, ct["percent"].values)]
+    labels = [
+        f"{int(v)} ({p:.1f}%)"
+        for v, p in zip(ct["count"].values, ct["percent"].values, strict=False)
+    ]
     plt.pie(ct["count"].values, labels=labels, autopct="%.1f%%", startangle=90)
     plt.title(f"Class Pie — {name}")
     _savefig(FIG / f"{name}_class_pie.png")
 
 
-def missing_value_fraction(df: pd.DataFrame, name: str):
+def missing_value_fraction(df: pd.DataFrame, name: str) -> None:
     mv = df.isna().mean().sort_values(ascending=False).rename("missing_fraction")
     mv_df = mv.rename_axis("column").reset_index()
     _savetab(mv_df, TAB / f"{name}_missing_fraction.csv")
@@ -105,79 +112,111 @@ def missing_value_fraction(df: pd.DataFrame, name: str):
     _savefig(FIG / f"{name}_missing_bar.png")
 
 
-def numeric_distributions(df: pd.DataFrame, numeric_cols: list[str], name: str):
+def numeric_distributions(
+    df: pd.DataFrame,
+    numeric_cols: list[str],
+    name: str,
+) -> None:
     numeric_cols = [c for c in numeric_cols if c in df.columns]
     if not numeric_cols:
         return
+
     cols = min(4, len(numeric_cols))
     rows = int(np.ceil(len(numeric_cols) / cols))
 
     # hist
     plt.figure(figsize=(4 * cols, 2.8 * rows))
-    for i, c in enumerate(numeric_cols, 1):
+    for i, col in enumerate(numeric_cols, 1):
         plt.subplot(rows, cols, i)
-        sns.histplot(df[c].dropna(), kde=True, bins=30)
-        plt.title(c)
+        sns.histplot(df[col].dropna(), kde=True, bins=30)
+        plt.title(col)
     plt.suptitle(f"Histograms — {name}", y=1.02)
     _savefig(FIG / f"{name}_hists.png")
 
     # box
     plt.figure(figsize=(4 * cols, 2.8 * rows))
-    for i, c in enumerate(numeric_cols, 1):
+    for i, col in enumerate(numeric_cols, 1):
         plt.subplot(rows, cols, i)
-        sns.boxplot(x=df[c], orient="h")
-        plt.title(c)
+        sns.boxplot(x=df[col], orient="h")
+        plt.title(col)
     plt.suptitle(f"Boxplots — {name}", y=1.02)
     _savefig(FIG / f"{name}_boxplots.png")
 
 
-def correlation_heatmap(df: pd.DataFrame, numeric_cols: list[str], name: str):
+def correlation_heatmap(df: pd.DataFrame, numeric_cols: list[str], name: str) -> None:
     use = [c for c in numeric_cols if c in df.columns]
     if len(use) < 2:
         return
+
     corr = df[use].corr(numeric_only=True)
     corr.to_csv(TAB / f"{name}_corr.csv", index=True)
+
     plt.figure(figsize=(0.8 * len(use) + 3, 0.8 * len(use) + 3))
-    sns.heatmap(corr, cmap="coolwarm", vmin=-1, vmax=1, annot=True, fmt=".2f", linewidths=0.3)
+    sns.heatmap(
+        corr,
+        cmap="coolwarm",
+        vmin=-1,
+        vmax=1,
+        annot=True,
+        fmt=".2f",
+        linewidths=0.3,
+    )
     plt.title(f"Correlation Heatmap — {name}")
     _savefig(FIG / f"{name}_corr_heatmap.png")
 
 
-def correlation_with_target(df: pd.DataFrame, numeric_cols: list[str], target: str, name: str):
+def correlation_with_target(
+    df: pd.DataFrame,
+    numeric_cols: list[str],
+    target: str,
+    name: str,
+) -> None:
     """
-    Matriks korelasi yang juga memasukkan kolom target (tsu),
-    mirip Gambar 'Correlation Matrix (including Tsunami)' di tesis.
+    Matriks korelasi yang juga memasukkan kolom target (tsu).
     """
     cols = [c for c in numeric_cols if c in df.columns]
     if target in df.columns and target not in cols:
         cols.append(target)
     if len(cols) < 2:
         return
+
     corr = df[cols].corr(numeric_only=True)
-    # simpan tabel
     corr.to_csv(TAB / f"{name}_corr_with_target.csv", index=True)
-    # plot heatmap
+
     plt.figure(figsize=(0.8 * len(cols) + 3, 0.8 * len(cols) + 3))
-    sns.heatmap(corr, cmap="coolwarm", vmin=-1, vmax=1, annot=True, fmt=".2f", linewidths=0.3)
+    sns.heatmap(
+        corr,
+        cmap="coolwarm",
+        vmin=-1,
+        vmax=1,
+        annot=True,
+        fmt=".2f",
+        linewidths=0.3,
+    )
     plt.title(f"Correlation Matrix (including {target}) — {name}")
     _savefig(FIG / f"{name}_corr_with_target.png")
 
 
-def pairplot_sample(df: pd.DataFrame, cols: list[str], hue: str, name: str, max_rows: int = 800):
+def pairplot_sample(
+    df: pd.DataFrame,
+    cols: list[str],
+    hue: str,
+    name: str,
+    max_rows: int = 800,
+) -> None:
     """
-    Robust pairplot:
-    - ambil hanya kolom numeric (kecuali hue)
-    - hapus duplikat nama kolom
-    - sample jika baris > max_rows
-    - skip jika <2 kolom numeric valid
+    Pairplot robust:
+    - hanya kolom numerik (kecuali hue)
+    - sample bila baris > max_rows
+    - skip jika <2 kolom numerik valid
     """
     use_cols = [c for c in cols if c in df.columns]
     if hue in use_cols:
         use_cols.remove(hue)
-    num_cols = [c for c in use_cols if pd.api.types.is_numeric_dtype(df[c])]
 
-    # hapus duplikat sambil menjaga urutan
-    num_cols = list(dict.fromkeys(num_cols))
+    num_cols = [c for c in use_cols if pd.api.types.is_numeric_dtype(df[c])]
+    num_cols = list(dict.fromkeys(num_cols))  # buang duplikat
+
     if hue not in df.columns or len(num_cols) < 2:
         return
 
@@ -185,9 +224,10 @@ def pairplot_sample(df: pd.DataFrame, cols: list[str], hue: str, name: str, max_
     if len(sub) > max_rows:
         sub = sub.sample(max_rows, random_state=42)
 
-    # buang kolom yang isinya list/array
+    # buang kolom yang berisi list/array
     num_cols = [
-        c for c in num_cols
+        c
+        for c in num_cols
         if not sub[c].apply(lambda x: isinstance(x, (list, tuple, np.ndarray))).any()
     ]
     if len(num_cols) < 2:
@@ -211,13 +251,13 @@ def numeric_vs_target_distributions(
     target: str,
     name: str,
     outfile: str | None = None,
-):
+) -> None:
     """
-    Histogram fitur numerik dengan hue=target (tsu),
-    meniru Gambar 'Hubungan Data Numerik dengan Target Tsunami'.
+    Histogram fitur numerik dengan hue=target (tsu).
     """
     if target not in df.columns:
         return
+
     cols = [c for c in cols if c in df.columns]
     if not cols:
         return
@@ -226,11 +266,11 @@ def numeric_vs_target_distributions(
     nrows = int(np.ceil(len(cols) / ncols))
 
     plt.figure(figsize=(5 * ncols, 3.2 * nrows))
-    for i, c in enumerate(cols, 1):
+    for i, col in enumerate(cols, 1):
         plt.subplot(nrows, ncols, i)
         sns.histplot(
             data=df,
-            x=c,
+            x=col,
             hue=target,
             kde=True,
             bins=30,
@@ -238,18 +278,22 @@ def numeric_vs_target_distributions(
             common_norm=False,
             element="step",
         )
-        plt.title(c)
+        plt.title(col)
+
     plt.suptitle(f"Numeric Features vs {target} — {name}", y=1.02)
     fname = outfile or f"{name}_num_vs_{target}.png"
     _savefig(FIG / fname)
 
 
-def temporal_plots(df: pd.DataFrame, name: str, target: str = "tsu"):
-    """
-    Plot jumlah event per tahun (khusus tsu==1 jika target tersedia).
-    """
+def temporal_plots(
+    df: pd.DataFrame,
+    name: str,
+    target: str = "tsu",
+) -> None:
+    """Jumlah kejadian per tahun (fokus tsu=1 kalau target tersedia)."""
     if "year" not in df.columns:
         return
+
     dfx = df.copy()
     if target in dfx.columns:
         dfx = dfx[dfx[target] == 1]
@@ -257,12 +301,13 @@ def temporal_plots(df: pd.DataFrame, name: str, target: str = "tsu"):
     yr = pd.to_numeric(dfx["year"], errors="coerce").dropna().astype(int)
     if yr.empty:
         return
-    yearly = yr.value_counts().sort_index()
 
+    yearly = yr.value_counts().sort_index()
     year_df = yearly.rename("count").reset_index().rename(columns={"index": "year"})
     _savetab(year_df, TAB / f"{name}_events_by_year.csv")
 
-    mean, std = yearly.mean(), yearly.std()
+    mean = float(yearly.mean())
+    std = float(yearly.std())
     spike = yearly[yearly > mean + 2 * std]
     _savetab(
         spike.rename("count").reset_index().rename(columns={"index": "spike_year"}),
@@ -279,21 +324,22 @@ def temporal_plots(df: pd.DataFrame, name: str, target: str = "tsu"):
     _savefig(FIG / f"{name}_by_year.png")
 
 
-def spatial_scatter(df: pd.DataFrame, name: str, target: str = "tsu"):
-    """Peta global. Default pakai fallback scatter (tanpa PyGMT, tanpa warning).
-    Set env EDA_USE_PYGMT=1 untuk mencoba tilemap PyGMT dengan warnings disenyapkan."""
+def spatial_scatter(df: pd.DataFrame, name: str, target: str = "tsu") -> None:
+    """
+    Peta global sederhana (scatter lon/lat).
+    """
     import os
 
     if not {"latitude", "longitude"}.issubset(df.columns):
         return
 
-    # --- fallback scatter (bersih & cepat) ---
-    def _fallback():
+    def _fallback() -> None:
         plt.figure(figsize=(7.5, 3.8))
         plt.axhline(0, color="lightgray", lw=0.8)
         plt.axvline(0, color="lightgray", lw=0.8)
         plt.xlim(-180, 180)
         plt.ylim(-90, 90)
+
         if target in df.columns:
             sns.scatterplot(
                 data=df,
@@ -307,12 +353,12 @@ def spatial_scatter(df: pd.DataFrame, name: str, target: str = "tsu"):
             plt.legend(title=target, loc="upper right")
         else:
             plt.scatter(df["longitude"], df["latitude"], s=8, alpha=0.6)
+
         plt.title(f"Global Scatter (lon/lat) — {name}")
         plt.xlabel("Longitude")
         plt.ylabel("Latitude")
         _savefig(FIG / f"{name}_global_scatter.png")
 
-    # pakai PyGMT hanya jika diminta lewat env
     if os.getenv("EDA_USE_PYGMT", "0") != "1":
         _fallback()
         return
@@ -320,7 +366,6 @@ def spatial_scatter(df: pd.DataFrame, name: str, target: str = "tsu"):
     try:
         import pygmt  # type: ignore
 
-        # Senyapkan log GMT (hindari warning “(s - y_min) …”)
         with pygmt.config(VERBOSE="q"):
             fig = pygmt.Figure()
             fig.tilemap(
@@ -330,11 +375,7 @@ def spatial_scatter(df: pd.DataFrame, name: str, target: str = "tsu"):
                     "https://server.arcgisonline.com/ArcGIS/rest/services/"
                     "World_Street_Map/MapServer/tile/{z}/{y}/{x}.png"
                 ),
-                frame=[
-                    "xafg",
-                    "yafg",
-                    f"+t{name.capitalize()} Events: Global Distribution",
-                ],
+                frame=["xafg", "yafg", f"+t{name.capitalize()} Events: Global Distribution"],
             )
             if target in df.columns:
                 for val in sorted(pd.Series(df[target]).dropna().unique()):
@@ -343,7 +384,7 @@ def spatial_scatter(df: pd.DataFrame, name: str, target: str = "tsu"):
                         x=sub["longitude"],
                         y=sub["latitude"],
                         style="c0.08c",
-                        fill=("red" if int(val) == 1 else "dodgerblue"),
+                        fill="red" if int(val) == 1 else "dodgerblue",
                         pen="black",
                         label=f"tsu={int(val)}",
                     )
@@ -361,7 +402,7 @@ def spatial_scatter(df: pd.DataFrame, name: str, target: str = "tsu"):
         _fallback()
 
 
-# ---------- SMALL HELPERS TO REMOVE DUPLICATION ----------
+# ---------- SMALL HELPERS ----------
 def _plot_top_counts(
     s: pd.Series,
     title: str,
@@ -369,15 +410,12 @@ def _plot_top_counts(
     outfile: str,
     orient: str = "h",
     table_name: str | None = None,
-):
-    """
-    s: Series berisi hitungan (index = kategori, values = count)
-    orient: 'h' (horizontal bar) atau 'v' (vertical bar)
-    """
+) -> None:
     s = s.dropna()
     if s.empty:
         return
-    if table_name:
+
+    if table_name is not None:
         _savetab(
             s.rename_axis(s.index.name or "key").reset_index(name="count"),
             TAB / table_name,
@@ -403,10 +441,11 @@ def _plot_top_mean(
     xlabel: str,
     outfile: str,
     table_name: str,
-):
+) -> None:
     s = series.sort_values(ascending=False).head(10)
     if s.empty:
         return
+
     _savetab(s.rename(series.name).reset_index(), TAB / table_name)
     plt.figure(figsize=(9, 4))
     sns.barplot(x=s.values, y=s.index)
@@ -415,7 +454,7 @@ def _plot_top_mean(
     _savefig(FIG / outfile)
 
 
-def categorical_and_country_plots(df_t: pd.DataFrame, df_v: pd.DataFrame):
+def categorical_and_country_plots(df_t: pd.DataFrame, df_v: pd.DataFrame) -> None:
     # Tektonik: top 8 region
     if "region" in df_t.columns:
         top = df_t["region"].value_counts().nlargest(8)
@@ -428,7 +467,7 @@ def categorical_and_country_plots(df_t: pd.DataFrame, df_v: pd.DataFrame):
             table_name="tectonic_top_regions.csv",
         )
 
-    # Tektonik: top 10 countries tsunami
+    # Tektonik: top 10 negara dengan tsunami
     if {"country", "tsu"}.issubset(df_t.columns):
         s = df_t[df_t["tsu"] == 1]["country"].value_counts().nlargest(10)
         _plot_top_counts(
@@ -440,7 +479,7 @@ def categorical_and_country_plots(df_t: pd.DataFrame, df_v: pd.DataFrame):
             table_name="tectonic_top_countries_tsu.csv",
         )
 
-    # Tektonik: mean magnitude by country
+    # Tektonik: rata-rata magnitudo per negara
     if {"country", "mag"}.issubset(df_t.columns):
         mean_mag = df_t.groupby("country")["mag"].mean()
         _plot_top_mean(
@@ -463,7 +502,7 @@ def categorical_and_country_plots(df_t: pd.DataFrame, df_v: pd.DataFrame):
             table_name="volcanic_top_types.csv",
         )
 
-    # Vulkanik: top 10 countries tsunami
+    # Vulkanik: top 10 negara dengan tsunami
     if {"country", "tsu"}.issubset(df_v.columns):
         s = df_v[df_v["tsu"] == 1]["country"].value_counts().nlargest(10)
         _plot_top_counts(
@@ -475,7 +514,7 @@ def categorical_and_country_plots(df_t: pd.DataFrame, df_v: pd.DataFrame):
             table_name="volcanic_top_countries_tsu.csv",
         )
 
-    # Vulkanik: mean VEI by country
+    # Vulkanik: rata-rata VEI per negara
     if {"country", "vei"}.issubset(df_v.columns):
         mean_vei = df_v.groupby("country")["vei"].mean()
         _plot_top_mean(
@@ -487,8 +526,42 @@ def categorical_and_country_plots(df_t: pd.DataFrame, df_v: pd.DataFrame):
         )
 
 
+# ---------- OPTIONAL: TIME FIELDS HELPER ----------
+def _add_time_fields(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Tambahkan kolom year/month/day/hour/minute/second bila bisa dideduksi
+    dari kolom 'time' atau 'origin_time'. Tidak menimpa kolom yang sudah ada.
+    """
+    out = df.copy()
+
+    # cari kolom kandidat
+    lower_to_col = {c.lower(): c for c in out.columns}
+    time_col = next(
+        (lower_to_col[key] for key in ("time", "origin_time") if key in lower_to_col),
+        None,
+    )
+    if time_col is None:
+        return out
+
+    t = pd.to_datetime(out[time_col], errors="coerce", utc=False)
+
+    parts: dict[str, pd.Series] = {
+        "year": t.dt.year,
+        "month": t.dt.month,
+        "day": t.dt.day,
+        "hour": t.dt.hour,
+        "minute": t.dt.minute,
+        "second": t.dt.second,
+    }
+    for name, values in parts.items():
+        if name not in out.columns:
+            out[name] = values
+
+    return out
+
+
 # ---------- MASTER RUN ----------
-def run_full_eda(df: pd.DataFrame, ds_name: str, target: str = "tsu"):
+def run_full_eda(df: pd.DataFrame, ds_name: str, target: str = "tsu") -> None:
     # simpan basic info
     (TAB / f"{ds_name}_info.txt").write_text(_info_to_txt(df), encoding="utf-8")
     _savetab(df.head(20), TAB / f"{ds_name}_head20.csv")
@@ -501,7 +574,7 @@ def run_full_eda(df: pd.DataFrame, ds_name: str, target: str = "tsu"):
     if "mo" in df.columns or "dy" in df.columns:
         df = df.rename(columns={"mo": "month", "dy": "day"})
 
-    # list kolom numerik (kecuali target)
+    # daftar kolom numerik (tanpa target)
     numeric_cols = [
         c
         for c in df.columns
@@ -518,7 +591,6 @@ def run_full_eda(df: pd.DataFrame, ds_name: str, target: str = "tsu"):
 
     # visual khusus per dataset
     if ds_name == "tectonic":
-        # histogram numerik per kelas tsunami (mirip Gambar 4)
         numeric_vs_target_distributions(
             df,
             cols=["mag", "depth", "latitude", "longitude"],
@@ -528,10 +600,9 @@ def run_full_eda(df: pd.DataFrame, ds_name: str, target: str = "tsu"):
         )
         pp_cols = ["mag", "depth", "latitude", "longitude", target]
     else:
-        # volcanic: sesuaikan fitur penting
         numeric_vs_target_distributions(
             df,
-            cols=["eq", "elevation", "distance_to_coast_km", "latitude"],
+            cols=["eq", "elevation", "latitude"],
             target=target,
             name=ds_name,
             outfile="volcanic_num_vs_tsu.png",
@@ -541,14 +612,16 @@ def run_full_eda(df: pd.DataFrame, ds_name: str, target: str = "tsu"):
     pairplot_sample(df, pp_cols, hue=target, name=ds_name)
 
 
-def main(datasets: list[str]):
+def main(datasets: list[str]) -> None:
     _ensure_dirs()
 
-    dfs = {}
+    dfs: dict[str, pd.DataFrame] = {}
     for ds in datasets:
         df = _load_dataset(ds)
         if "tsu" not in df.columns:
-            raise KeyError(f"'{ds}' tidak memiliki kolom target 'tsu' setelah preprocessing.")
+            raise KeyError(
+                f"'{ds}' tidak memiliki kolom target 'tsu' setelah preprocessing."
+            )
         dfs[ds] = df
         print(f"[EDA] start {ds} -> rows={len(df)} cols={df.shape[1]}")
 
@@ -562,12 +635,12 @@ def main(datasets: list[str]):
 
 
 if __name__ == "__main__":
-    ap = argparse.ArgumentParser(description="EDA for tectonic/volcanic")
-    ap.add_argument(
+    parser = argparse.ArgumentParser(description="EDA for tectonic/volcanic")
+    parser.add_argument(
         "--datasets",
         nargs="+",
         default=["tectonic", "volcanic"],
         help="list dataset names: tectonic volcanic",
     )
-    args = ap.parse_args()
+    args = parser.parse_args()
     main(args.datasets)
