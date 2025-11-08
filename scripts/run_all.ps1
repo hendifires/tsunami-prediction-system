@@ -109,8 +109,8 @@ Invoke-Step "5) Stacking (train + threshold tuning)" {
     "--use-smote", $UseSmote
   )
 
-  # default: XGB + meta-grid ON
-  $stackArgs += @("--with-xgb","--meta-grid")
+  # meta-grid ON (XGBoost sudah tidak dipakai)
+  $stackArgs += @("--meta-grid")
 
   if ($WithMLP) { $stackArgs += "--with-mlp" }
   if ($Fast)    { $stackArgs += @("--fast","--fast-n",$FastN) }
@@ -131,7 +131,8 @@ Invoke-Step "6) Experiments (configs.yaml)" {
 # 7) Compare runs (compare_runs + SMOTE effects)
 Invoke-Step "7) Compare runs + SMOTE effects" {
   try {
-    python -m tsunami_prediction.compare_runs --effects
+    # compare_runs sekarang otomatis hitung efek SMOTE (tanpa --effects)
+    python -m tsunami_prediction.compare_runs
   } catch {
     Write-Warning "compare_runs gagal: $_"
   }

@@ -12,6 +12,10 @@ Runner serbaguna untuk eksperimen (berbasis configs.yaml):
     -> buat ulang split train/test + varian SMOTE
 - STACK (stacking_pipeline)
     -> train Stacking + simpan threshold & artefak
+
+Versi tesis:
+- Tidak ada XGBoost sama sekali.
+- Base learners: DT, RF, MLP (opsional), SVM, NB, KNN.
 """
 
 import os
@@ -54,7 +58,8 @@ def _str_bool(x: Any) -> bool:
 
 def load_cfg(path: Path) -> Dict[str, Any]:
     with path.open("r", encoding="utf-8") as f:
-        return yaml.safe_load(f) or {}
+        data = yaml.safe_load(f)
+    return data or {}
 
 
 # ---------- Command builders ----------
@@ -77,7 +82,7 @@ def build_fe_cmd(cfg: Dict[str, Any]) -> List[str]:
     """
     Bangun perintah untuk feature_engineering.
 
-    Konfigurasi opsional:
+    Konfigurasi opsional di YAML:
 
     fe:
       overwrite: true
@@ -105,7 +110,7 @@ def build_smote_cmd(cfg: Dict[str, Any]) -> List[str]:
     """
     Bangun perintah untuk smote_pipeline.
 
-    Konfigurasi opsional:
+    Konfigurasi opsional di YAML:
 
     smote:
       overwrite: true
@@ -117,7 +122,7 @@ def build_smote_cmd(cfg: Dict[str, Any]) -> List[str]:
         "tsunami_prediction.smote_pipeline",
         "--overwrite" if _str_bool(sm.get("overwrite", True)) else "",
     ]
-    return [c for c in cmd if c]
+    return [c for c in cmd if c]  # buang string kosong
 
 
 def build_stack_cmds(
@@ -142,12 +147,9 @@ def build_stack_cmds(
     top_n = int(g("top_n", 30))
     feature_select = str(g("feature_select", "none")).lower()
 
-    # default: XGB dimatikan (hanya demi kompatibilitas argumen lama)
-    with_xgb = _str_bool(g("with_xgb", False))
-    with_mlp = _str_bool(g("with_mlp", False))
-
+    # Tidak ada XGBoost lagi
+    with_mlp = _str_bool(g("with_mlp", True))
     meta_grid = _str_bool(g("meta_grid", True))
-
     fast = _str_bool(g("fast", False))
     fast_n = int(g("fast_n", 5000))
 
@@ -169,9 +171,6 @@ def build_stack_cmds(
         "--use-smote",
         use_smote,
     ]
-
-    # toggles XGB (dipertahankan cuma untuk kompatibilitas; default False)
-    base_cmd += ["--with-xgb"] if with_xgb else ["--no-xgb"]
 
     # meta-grid
     base_cmd += ["--meta-grid"] if meta_grid else ["--no-meta-grid"]
@@ -198,7 +197,9 @@ def build_stack_cmds(
 def main() -> None:
     import argparse
 
-    parser = argparse.ArgumentParser(description="Runner eksperimen preprocessing + FE + SMOTE + stacking")
+    parser = argparse.ArgumentParser(
+        description="Runner eksperimen preprocessing + FE + SMOTE + stacking"
+    )
     parser.add_argument(
         "--config",
         type=str,
@@ -224,7 +225,10 @@ def main() -> None:
 
     # seeds untuk random_state stacking
     seeds_cfg = cfg.get("seeds")
-    seeds = seeds_cfg or [int(global_cfg.get("random_state", 42))]
+    if seeds_cfg:
+        seeds = list(seeds_cfg)
+    else:
+        seeds = [int(global_cfg.get("random_state", 42))]
 
     # kalau tidak ada runs didefinisikan, buat satu run default
     if not runs_cfg:
