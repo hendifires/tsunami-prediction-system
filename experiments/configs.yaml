@@ -1,14 +1,10 @@
 # Experiments matrix for stacking_pipeline
-# Versi tesis: tanpa XGBoost, fokus pada base learner klasik
+# Versi tesis: fokus pada base learner klasik
 # (Decision Tree, Random Forest, MLP, SVM, Naive Bayes, KNN)
 
 global:
   cv: 3
   random_state: 42
-
-  # XGBoost dimatikan: stacking_pipeline sudah tidak memakai XGB
-  # agar fokus pada peningkatan kinerja base learner klasik.
-  with_xgb: false
 
   # MLP diaktifkan sebagai salah satu base learner
   # (bisa dimatikan jika ingin eksperimen tanpa neural network).

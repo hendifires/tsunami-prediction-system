@@ -34,9 +34,6 @@ Catatan penting tesis (versi ini):
     * Naive Bayes (nb)
     * KNN (knn)
 - Logistic Regression hanya dipakai sebagai meta-learner, bukan base model.
-- XGBoost TIDAK digunakan agar fokus tesis adalah peningkatan kinerja
-  base learner klasik melalui stacking, bukan perbandingan dengan model
-  gradient boosting yang sangat kuat.
 """
 
 import argparse
@@ -159,7 +156,6 @@ def _metrics(
     }
 
     if y_prob is not None:
-        # hitung metric yang berbasis probabilitas dengan pola yang sama
         prob_metrics = {
             "roc_auc": roc_auc_score,
             "pr_auc": average_precision_score,
@@ -394,7 +390,6 @@ def to_np_writable(X: object) -> np.ndarray:
 # ---------------- Models ----------------
 def build_base_learners(
     random_state: int,
-    with_xgb: bool,  # dipertahankan hanya untuk kompatibilitas CLI, TIDAK digunakan
     with_mlp: bool,
 ) -> List[Tuple[str, object]]:
     """
@@ -409,12 +404,7 @@ def build_base_learners(
     - knn : KNeighborsClassifier
 
     Logistic Regression hanya dipakai sebagai meta-learner di Stacking.
-    XGBoost tidak digunakan lagi (argumen with_xgb diabaikan).
     """
-    # "Gunakan" with_xgb supaya tidak dianggap unused oleh linter/IDE
-    if with_xgb:
-        _log("[Stack] with_xgb flag is ignored in this version (XGBoost not used).")
-
     to_np_tf = FunctionTransformer(to_np_writable, validate=False)
 
     learners: List[Tuple[str, object]] = [
@@ -833,7 +823,6 @@ def run_one(
     smote_variant: Optional[str],
     cv: int,
     random_state: int,
-    with_xgb: bool,
     with_mlp: bool,
     fast_sample: Optional[int],
     feature_select: str,
@@ -884,7 +873,7 @@ def run_one(
     )
 
     # Base learners: dt, rf, mlp (opsional), svm, nb, knn
-    base_learners = build_base_learners(random_state, with_xgb, with_mlp)
+    base_learners = build_base_learners(random_state, with_mlp)
     is_volc = dataset.lower() == "volcanic"
 
     # volcanic: passthrough dimatikan agar meta-learner lebih stabil
@@ -1098,12 +1087,6 @@ def main() -> None:
     ap.add_argument("--cv", type=int, default=3)
     ap.add_argument("--random-state", type=int, default=42)
 
-    # Toggles: with_xgb dipertahankan hanya agar CLI lama tidak error,
-    # tapi NILAI ini diabaikan di build_base_learners (XGBoost tidak digunakan).
-    ap.add_argument("--with-xgb", dest="with_xgb", action="store_true")
-    ap.add_argument("--no-xgb", dest="with_xgb", action="store_false")
-    ap.set_defaults(with_xgb=False)
-
     ap.add_argument("--meta-grid", dest="meta_grid", action="store_true")
     ap.add_argument("--no-meta-grid", dest="meta_grid", action="store_false")
     ap.set_defaults(meta_grid=True)
@@ -1133,7 +1116,6 @@ def main() -> None:
     )
     args = ap.parse_args()
 
-    with_xgb = args.with_xgb
     meta_grid = args.meta_grid
     fast_n = args.fast_n if args.fast else None
 
@@ -1144,7 +1126,7 @@ def main() -> None:
     runtime_rows: List[Dict[str, float]] = []
 
     # Buat diagram arsitektur stacking sekali saja (pakai konfigurasi base learner default)
-    example_learners = build_base_learners(args.random_state, with_xgb, args.with_mlp)
+    example_learners = build_base_learners(args.random_state, args.with_mlp)
     plot_stacking_architecture(
         [name for name, _ in example_learners],
         FIG / "stacking_architecture.png",
@@ -1160,7 +1142,6 @@ def main() -> None:
                     smote_variant=None,
                     cv=args.cv,
                     random_state=args.random_state,
-                    with_xgb=with_xgb,
                     with_mlp=args.with_mlp,
                     fast_sample=fast_n,
                     feature_select=args.feature_select,
@@ -1184,7 +1165,6 @@ def main() -> None:
                         smote_variant=var,
                         cv=args.cv,
                         random_state=args.random_state,
-                        with_xgb=with_xgb,
                         with_mlp=args.with_mlp,
                         fast_sample=fast_n,
                         feature_select=args.feature_select,
@@ -1211,7 +1191,6 @@ def main() -> None:
                     smote_variant=var,
                     cv=args.cv,
                     random_state=args.random_state,
-                    with_xgb=with_xgb,
                     with_mlp=args.with_mlp,
                     fast_sample=fast_n,
                     feature_select=args.feature_select,
