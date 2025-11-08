@@ -49,7 +49,7 @@ from typing import Dict, List, Any
 
 try:
     import yaml  # type: ignore
-except Exception as e:
+except Exception as e:  # pragma: no cover - dependency error path
     raise SystemExit(
         "PyYAML belum terpasang. Install dulu: pip install pyyaml"
     ) from e
@@ -146,9 +146,7 @@ def build_stack_cmds(
 
     # helper: ambil nilai dari run_cfg, kalau tidak ada pakai global_cfg
     def g(key: str, default: Any) -> Any:
-        if key in run_cfg:
-            return run_cfg[key]
-        return global_cfg.get(key, default)
+        return run_cfg[key] if key in run_cfg else global_cfg.get(key, default)
 
     datasets = run_cfg.get("datasets", ["tectonic", "volcanic"])
 
