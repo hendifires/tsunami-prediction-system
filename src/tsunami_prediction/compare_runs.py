@@ -6,13 +6,17 @@ Compare multiple stacking runs (nosmote / smote / smote_tomek / smote_enn)
 by collecting metrics CSVs emitted by stacking_pipeline.py.
 
 Outputs utama:
-- reports/tables/compare_runs.csv   (one row per dataset+variant)
-- reports/tables/compare_runs.md    (markdown table)
-- reports/figures/compare_<metric>.png (grouped bar chart; optional)
+- reports/tables/compare_runs.csv
+    Satu baris per (dataset, variant), berisi metrik stacking ensemble.
+- reports/tables/compare_runs.md
+    Versi tabel dalam format markdown (siap copas ke tesis).
+- reports/figures/compare_<metric>.png
+    Grouped bar chart per metriks (opsional, dipilih via CLI).
 
 Selection rule per metrics file:
-1) Prefer row where model == 'stacking_lr_meta'
-2) Fallback ke baris dengan F1 tertinggi
+1) Utamakan baris dengan model == 'stacking_lr_meta'
+2) Jika tidak ada, fallback ke baris dengan F1 tertinggi
+3) Jika tetap tidak bisa, pakai baris pertama
 
 Tambahan untuk analisis SMOTE:
 - reports/tables/smote_effects_by_variant.csv
@@ -20,7 +24,13 @@ Tambahan untuk analisis SMOTE:
     berisi nilai baseline & varian serta delta untuk accuracy,
     precision, recall, f1, roc_auc, pr_auc.
 - reports/figures/smote_effects_f1.png
-    Bar plot delta F1 per varian & dataset (otomatis dibuat).
+    Bar plot delta F1 per varian & dataset.
+
+Catatan:
+- File runtime per base learner & stacking (semua varian)
+  sudah disiapkan oleh stacking_pipeline.py dalam
+  reports/tables/runtime_summary.csv, sehingga script ini
+  fokus hanya pada komparasi metrik kinerja stacking.
 """
 
 import argparse
@@ -60,7 +70,7 @@ _METRIC_COLS = [
     "fn",
     "tp",
     "fit_sec",
-    "grid_sec",  # waktu training per-model/stacking dan waktu meta-grid (NaN utk base models)
+    "grid_sec",  # waktu meta-grid untuk stacking (NaN/0 untuk model lain)
 ]
 
 _METRICS_MAIN = ["accuracy", "precision", "recall", "f1", "roc_auc", "pr_auc"]
@@ -90,7 +100,13 @@ def _savefig(path: Path) -> None:
 
 # ---------------- Core helpers ----------------
 def _pick_row(df: pd.DataFrame) -> pd.Series:
-    """Ambil baris model stacking; fallback ke F1 tertinggi; terakhir baris pertama."""
+    """
+    Ambil baris representatif dari metrics_df satu run:
+
+    1) Jika ada model 'stacking_lr_meta' → ambil baris itu.
+    2) Jika tidak ada → pilih baris dengan F1 tertinggi.
+    3) Jika tetap tidak ada info F1 → pakai baris pertama.
+    """
     if "model" in df.columns:
         sel = df[df["model"] == "stacking_lr_meta"]
         if not sel.empty:
@@ -126,6 +142,10 @@ def _read_metrics(path: Path) -> pd.Series | None:
 
 
 def collect(datasets: List[str], variants: List[str]) -> pd.DataFrame:
+    """
+    Kumpulkan satu baris stacking per (dataset, variant) dari:
+    reports/tables/<dataset>_stack_<variant}_metrics.csv
+    """
     rows: List[Dict] = []
     for ds in datasets:
         for var in variants:
@@ -200,7 +220,8 @@ def compute_smote_effects(df: pd.DataFrame) -> pd.DataFrame:
 
     Output kolom:
     - dataset, variant, baseline_variant
-    - <metric>_base, <metric>_variant, <metric>_delta untuk setiap metric utama.
+    - <metric>_base, <metric>_variant, <metric>_delta
+      untuk setiap metric utama (accuracy, precision, recall, f1, roc_auc, pr_auc).
     """
     if df.empty:
         return pd.DataFrame()
@@ -284,7 +305,7 @@ def _plot_smote_effects_f1(df_eff: pd.DataFrame, path: Path) -> None:
     plt.axhline(0.0, color="black", linewidth=0.8)
     plt.xticks(x, variants)
     plt.ylabel("Δ F1 (variant − nosmote)")
-    plt.title("Effect of SMOTE variants on F1")
+    plt.title("Effect of SMOTE variants on F1 (stacking_lr_meta)")
     plt.legend()
     _savefig(path)
 
@@ -292,7 +313,7 @@ def _plot_smote_effects_f1(df_eff: pd.DataFrame, path: Path) -> None:
 def handle_smote_effects(df: pd.DataFrame) -> None:
     """
     Wrapper terpisah untuk menghitung & menyimpan efek SMOTE,
-    agar blok kode di main() tetap ringkas (menghindari warning refactoring).
+    agar blok kode di main() tetap ringkas.
     """
     eff_df = compute_smote_effects(df)
     if eff_df.empty:
@@ -315,14 +336,16 @@ def main():
     ap.add_argument("--variants", nargs="+", default=VARIANT_TAGS, choices=VARIANT_TAGS)
     ap.add_argument(
         "--sort-metric",
-        default="f1",
+        # Fokus tesis: accuracy & precision → default sort pakai accuracy
+        default="accuracy",
         choices=["accuracy", "precision", "recall", "f1", "roc_auc", "pr_auc"],
     )
     ap.add_argument("--out-csv", default=str(TAB / "compare_runs.csv"))
     ap.add_argument("--out-md", default=str(TAB / "compare_runs.md"))
     ap.add_argument(
         "--plot-metric",
-        default="f1",
+        # Default visualisasi juga pakai accuracy (bisa diubah via CLI)
+        default="accuracy",
         choices=["accuracy", "precision", "recall", "f1", "roc_auc", "pr_auc", "none"],
     )
     args = ap.parse_args()
@@ -335,6 +358,7 @@ def main():
 
     df = _order_categories(df)
     if args.sort_metric in df.columns:
+        # urutkan per dataset, lalu berdasarkan sort_metric (desc)
         df = df.sort_values(["dataset", args.sort_metric], ascending=[True, False])
 
     out_csv = Path(args.out_csv)

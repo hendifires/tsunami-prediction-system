@@ -56,6 +56,27 @@ def _save_shape_summary(rows_cols: List[Tuple[str, int, int]]) -> None:
     )
 
 
+def _save_schema_and_samples(df: pd.DataFrame, dataset: str) -> None:
+    """
+    Simpan:
+    - Schema clean (Kolom, Tipe data, Contoh) -> untuk Tabel 6 & 7 di tesis.
+    - Sample baris nyata -> contoh data real di lampiran / ilustrasi.
+    """
+    rows: List[Dict[str, object]] = []
+    for col in df.columns:
+        series = df[col]
+        dtype = str(series.dtype)
+        non_na = series.dropna()
+        example = "" if non_na.empty else non_na.iloc[0]
+        rows.append({"Kolom": col, "Tipe data": dtype, "Contoh": example})
+
+    schema_df = pd.DataFrame(rows)
+    schema_df.to_csv(TAB / f"{dataset}_schema_clean.csv", index=False)
+
+    # contoh beberapa baris data real
+    df.head(20).to_csv(TAB / f"{dataset}_sample_clean.csv", index=False)
+
+
 # ================== CLEANING & STANDARDIZATION ==================
 def _standardize_columns(
     df: pd.DataFrame, col_map: Dict[str, str] | None = None
@@ -281,6 +302,26 @@ def _extract_time_cols(df: pd.DataFrame, time_col: str = "time_erupt") -> pd.Dat
 
 # ================== DATASET-SPECIFIC PREP ==================
 def prepare_tectonic(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Cleaning domain tektonik.
+    Target akhir kolom & tipe data (Tabel 6):
+    - id          : float64
+    - year        : float64
+    - month       : float64
+    - day         : float64
+    - hr          : float64
+    - mn          : float64
+    - sec         : float64
+    - country     : object
+    - area        : object
+    - region      : float64
+    - location    : object
+    - latitude    : float64
+    - longitude   : float64
+    - depth       : float64
+    - mag         : float64
+    - tsu         : int64
+    """
     # mapping khusus dari spesifikasi kolom raw
     df = _standardize_columns(
         df,
@@ -292,10 +333,11 @@ def prepare_tectonic(df: pd.DataFrame) -> pd.DataFrame:
     df = _clean_whitespace(df)
     df = _map_tsu_binary(df)
 
-    # ke numerik
+    # ke numerik (termasuk 'id' & 'region' agar sesuai spesifikasi)
     df = _to_numeric(
         df,
         [
+            "id",
             "year",
             "mo",
             "dy",
@@ -310,21 +352,12 @@ def prepare_tectonic(df: pd.DataFrame) -> pd.DataFrame:
             "ms",
             "mb",
             "ml",
-            "tsu",
+            "region",
         ],
     )
+
     # Mo/Dy -> month/day
     df = df.rename(columns={"mo": "month", "dy": "day"})
-
-    # region <- area tanpa FutureWarning
-    if "area" in df.columns:
-        if "region" in df.columns:
-            df["region"] = (
-                df["region"].astype("object")
-                .combine_first(df["area"].astype("object"))
-            )
-        else:
-            df["region"] = df["area"].astype("object")
 
     df = _normalize_calendar(df)
     df = _drop_out_of_bounds(df)
@@ -359,10 +392,57 @@ def prepare_tectonic(df: pd.DataFrame) -> pd.DataFrame:
 
     # pastikan kolom unik & index rapi
     df = df.loc[:, ~df.columns.duplicated()].reset_index(drop=True)
+
+    # ====== ENFORCE TIPE DATA SESUAI TABEL 6 ======
+    num_cols_float = [
+        "id",
+        "year",
+        "month",
+        "day",
+        "hr",
+        "mn",
+        "sec",
+        "latitude",
+        "longitude",
+        "depth",
+        "mag",
+        "region",
+    ]
+    for c in num_cols_float:
+        if c in df.columns:
+            df[c] = pd.to_numeric(df[c], errors="coerce").astype("float64")
+
+    for c in ["country", "area", "location"]:
+        if c in df.columns:
+            df[c] = df[c].astype("object")
+
+    if "tsu" in df.columns:
+        df["tsu"] = df["tsu"].astype("int64")
+
     return df
 
 
 def prepare_volcanic(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Cleaning domain vulkanik.
+    Target akhir kolom & tipe data (Tabel 7):
+    - id          : float64
+    - year        : float64
+    - month       : float64
+    - day         : float64
+    - name        : object
+    - location    : object
+    - country     : object
+    - latitude    : float64
+    - longitude   : float64
+    - elevation   : float64
+    - type        : object
+    - status      : object
+    - vei         : float64
+    - eq          : float64
+    - agent       : object
+    - tsu         : int64
+    """
     df = _standardize_columns(
         df,
         col_map={
@@ -377,6 +457,7 @@ def prepare_volcanic(df: pd.DataFrame) -> pd.DataFrame:
     df = _to_numeric(
         df,
         [
+            "id",
             "year",
             "mo",
             "dy",
@@ -388,7 +469,6 @@ def prepare_volcanic(df: pd.DataFrame) -> pd.DataFrame:
             "elevation",
             "vei",
             "eq",
-            "tsu",
         ],
     )
     df = df.rename(columns={"mo": "month", "dy": "day"})
@@ -426,6 +506,30 @@ def prepare_volcanic(df: pd.DataFrame) -> pd.DataFrame:
     df = _drop_duplicates_smart(df, dataset="volcanic")
 
     df = df.loc[:, ~df.columns.duplicated()].reset_index(drop=True)
+
+    # ====== ENFORCE TIPE DATA SESUAI TABEL 7 ======
+    num_cols_float = [
+        "id",
+        "year",
+        "month",
+        "day",
+        "latitude",
+        "longitude",
+        "elevation",
+        "vei",
+        "eq",
+    ]
+    for c in num_cols_float:
+        if c in df.columns:
+            df[c] = pd.to_numeric(df[c], errors="coerce").astype("float64")
+
+    for c in ["name", "location", "country", "type", "status", "agent"]:
+        if c in df.columns:
+            df[c] = df[c].astype("object")
+
+    if "tsu" in df.columns:
+        df["tsu"] = df["tsu"].astype("int64")
+
     return df
 
 
@@ -444,7 +548,8 @@ def encode_and_scale(
             f"[{dataset}] kolom target 'tsu' tidak ditemukan setelah cleaning."
         )
 
-    y = df["tsu"].astype(int)
+    # pastikan tsu int64
+    y = df["tsu"].astype("int64")
 
     if dataset == "tectonic":
         num_cols = [
@@ -614,6 +719,10 @@ def main(overwrite: bool = False, normalize: bool = True) -> None:
     _save_info_tables(df_t_clean, "tectonic_clean")
     _save_info_tables(df_v_clean, "volcanic_clean")
 
+    # Tabel skema + contoh data nyata (Tabel 6 & 7 + sample)
+    _save_schema_and_samples(df_t_clean, "tectonic")
+    _save_schema_and_samples(df_v_clean, "volcanic")
+
     # ---------- (OPSIONAL) NORMALIZATION + ENCODING ----------
     df_t_prep, _, _, _ = encode_and_scale(
         df_t_clean,
@@ -647,7 +756,7 @@ def main(overwrite: bool = False, normalize: bool = True) -> None:
         f"- Preprocessed (tec): {out_t_prep}\n"
         f"- Preprocessed (vul): {out_v_prep}\n"
         f"- Artifacts (pipes/cols): {ART}\n"
-        f"- QC tables: {TAB}\n"
+        f"- QC tables & schema: {TAB}\n"
     )
 
 

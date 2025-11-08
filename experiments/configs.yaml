@@ -1,36 +1,54 @@
 # Experiments matrix for stacking_pipeline
+# Versi tesis: tanpa XGBoost, fokus pada base learner klasik
+# (Decision Tree, Random Forest, MLP, SVM, Naive Bayes, KNN)
 
 global:
   cv: 3
   random_state: 42
-  with_xgb: true
-  with_mlp: false
+
+  # XGBoost dimatikan: stacking_pipeline sudah tidak memakai XGB
+  # agar fokus pada peningkatan kinerja base learner klasik.
+  with_xgb: false
+
+  # MLP diaktifkan sebagai salah satu base learner
+  # (bisa dimatikan jika ingin eksperimen tanpa neural network).
+  with_mlp: true
+
   feature_select: "none"   # none | pearson | rfe
   top_n: 30
-  meta_grid: true
-  fast: false              # true untuk debug cepat
-  fast_n: 5000
-  collect_outputs: true    # salin keluaran ke folder run
 
-# Opsional: jalankan tiap run dengan multi-seed (akan override global.random_state)
+  # Grid search untuk meta-learner (Logistic Regression)
+  meta_grid: true
+
+  # true untuk debug cepat (subsample train)
+  fast: false
+  fast_n: 5000
+
+  # Jika true, keluaran tiap run disalin ke folder khusus di experiments/runs/<name>/
+  collect_outputs: true
+
+# Opsional: jalankan tiap run dengan multi-seed (override global.random_state)
 seeds: [42]
 
 runs:
+  # Run otomatis: pilih SMOTE jika file train_smote tersedia, per dataset
   - name: auto_best
     datasets: ["tectonic", "volcanic"]
-    use_smote: "auto"     # auto|yes|no
+    use_smote: "auto"     # auto | yes | no
     ablation: false
 
+  # Ablation penuh: nosmote + smote + smote_tomek + smote_enn
   - name: ablation_full
     datasets: ["tectonic", "volcanic"]
-    ablation: true        # akan jalankan nosmote + smote + smote_tomek + smote_enn
+    ablation: true        # akan jalankan semua varian SMOTE
 
-  # Contoh run spesifik
+  # Contoh run spesifik volcanic (tanpa SMOTE)
   - name: volcanic_nosmote_only
     datasets: ["volcanic"]
     use_smote: "no"
     ablation: false
 
+  # Contoh run spesifik volcanic (hanya SMOTE standar)
   - name: volcanic_smote_only
     datasets: ["volcanic"]
     use_smote: "yes"

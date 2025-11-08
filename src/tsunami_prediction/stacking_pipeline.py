@@ -1,5 +1,5 @@
 from __future__ import annotations
-# cSpell:ignore nosmote smoteenn tomek passthrough liblinear lbfgs xgb oof proba preds joblib writeable sklearn hyperparams
+# cSpell:ignore nosmote smoteenn tomek passthrough liblinear lbfgs oof proba preds joblib writeable sklearn hyperparams
 
 """
 Stacking Ensemble Pipeline + SMOTE Ablation (fast & robust)
@@ -23,7 +23,20 @@ Tambahan untuk dokumentasi tesis:
 - reports/tables/model_hyperparams.csv
     Ringkasan model & hyperparameter utama untuk semua base & meta learner.
 - reports/tables/runtime_summary.csv
-    Ringkasan waktu eksekusi per dataset/varian (stack_fit_sec, grid_sec, run_sec).
+    Ringkasan waktu eksekusi per dataset/varian/model.
+
+Catatan penting tesis (versi ini):
+- Base learners hanya model klasik:
+    * Decision Tree (dt)
+    * Random Forest (rf)
+    * Neural Network / MLP (mlp)
+    * SVM (svm)
+    * Naive Bayes (nb)
+    * KNN (knn)
+- Logistic Regression hanya dipakai sebagai meta-learner, bukan base model.
+- XGBoost TIDAK digunakan agar fokus tesis adalah peningkatan kinerja
+  base learner klasik melalui stacking, bukan perbandingan dengan model
+  gradient boosting yang sangat kuat.
 """
 
 import argparse
@@ -47,16 +60,16 @@ from joblib import dump
 from sklearn.base import clone
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import StandardScaler, FunctionTransformer
-from sklearn.linear_model import LogisticRegression, SGDClassifier
+from sklearn.linear_model import LogisticRegression
 from sklearn.neighbors import KNeighborsClassifier
 from sklearn.naive_bayes import GaussianNB
 from sklearn.tree import DecisionTreeClassifier
 from sklearn.feature_selection import RFE
 from sklearn.ensemble import (
     RandomForestClassifier,
-    GradientBoostingClassifier,
     StackingClassifier,
 )
+from sklearn.svm import SVC
 from sklearn.model_selection import GridSearchCV, cross_val_predict
 from sklearn.metrics import (
     accuracy_score, precision_score, recall_score, f1_score,
@@ -141,7 +154,7 @@ def _metrics(y_true: np.ndarray, y_pred: np.ndarray, y_prob: Optional[np.ndarray
     return out
 
 
-# -------- Sanitize feature names for XGBoost & Stacking --------
+# -------- Sanitize feature names for Stacking --------
 _BAD_CHARS = {
     "[": "(", "]": ")", "<": "_lt_", ">": "_gt_", "{": "(", "}": ")",
     "/": "_", "\\": "_", ":": "_", ";": "_", ",": "_", "=": "_",
@@ -335,42 +348,27 @@ def to_np_writable(X):
 # ---------------- Models ----------------
 def build_base_learners(
     random_state: int,
-    with_xgb: bool,
+    with_xgb: bool,   # disimpan hanya untuk kompatibilitas CLI, TIDAK digunakan
     with_mlp: bool,
 ) -> List[Tuple[str, object]]:
-    """Semua base learners dikemas Pipeline. NB diberi transformer agar array writable."""
+    """
+    Kemas semua base learners dalam bentuk (name, estimator).
+
+    Versi tesis ini hanya memakai base learner klasik:
+    - dt  : DecisionTreeClassifier
+    - rf  : RandomForestClassifier
+    - mlp : MLPClassifier (opsional, diaktifkan lewat --with-mlp)
+    - svm : SVC dengan probability=True
+    - nb  : GaussianNB
+    - knn : KNeighborsClassifier
+
+    Logistic Regression hanya dipakai sebagai meta-learner di Stacking.
+    XGBoost tidak digunakan lagi.
+    """
     to_np_tf = FunctionTransformer(to_np_writable, validate=False)
 
+    # Base learners yang selalu dipakai
     learners: List[Tuple[str, object]] = [
-        (
-            "lr",
-            Pipeline(
-                [
-                    ("scaler", StandardScaler()),
-                    ("clf", LogisticRegression(max_iter=5000, class_weight="balanced")),
-                ]
-            ),
-        ),
-        (
-            "sgd",
-            Pipeline(
-                [
-                    ("scaler", StandardScaler()),
-                    (
-                        "clf",
-                        SGDClassifier(
-                            loss="log_loss",
-                            alpha=1e-4,
-                            class_weight="balanced",
-                            max_iter=2000,
-                            early_stopping=True,
-                            n_iter_no_change=5,
-                            random_state=random_state,
-                        ),
-                    ),
-                ]
-            ),
-        ),
         (
             "knn",
             Pipeline(
@@ -405,9 +403,28 @@ def build_base_learners(
                 class_weight="balanced_subsample",
             ),
         ),
-        ("gb", GradientBoostingClassifier(random_state=random_state)),
+        (
+            "svm",
+            Pipeline(
+                [
+                    ("scaler", StandardScaler()),
+                    (
+                        "clf",
+                        SVC(
+                            kernel="rbf",
+                            C=1.0,
+                            gamma="scale",
+                            probability=True,
+                            class_weight="balanced",
+                            random_state=random_state,
+                        ),
+                    ),
+                ]
+            ),
+        ),
     ]
 
+    # --- MLP / Neural Network (opsional) ---
     if with_mlp:
         with suppress(Exception):
             from sklearn.neural_network import MLPClassifier
@@ -427,27 +444,6 @@ def build_base_learners(
                                 ),
                             ),
                         ]
-                    ),
-                )
-            )
-
-    if with_xgb:
-        with suppress(Exception):
-            from xgboost import XGBClassifier  # type: ignore
-
-            learners.append(
-                (
-                    "xgb",
-                    XGBClassifier(
-                        n_estimators=200,
-                        learning_rate=0.08,
-                        max_depth=5,
-                        subsample=0.9,
-                        colsample_bytree=0.9,
-                        eval_metric="logloss",
-                        random_state=random_state,
-                        n_jobs=-1,
-                        tree_method="hist",
                     ),
                 )
             )
@@ -586,7 +582,6 @@ def _append_hyperparam_rows(
     """Tambahkan ringkasan hyperparams ke list untuk disimpan ke CSV."""
     variant = suffix
 
-    # gunakan extend + comprehension (menghindari warning 'for-append loop')
     hyper_rows.extend(
         {
             "dataset": dataset,
@@ -628,7 +623,6 @@ def plot_stacking_architecture(model_names: List[str], out_png: Path) -> None:
     top_y = 0.9
     spacing = 0.08
 
-    # Base learners di sisi kiri
     centers_y: List[float] = []
     for i, name in enumerate(model_names):
         y = top_y - i * spacing
@@ -696,16 +690,28 @@ def plot_stacking_architecture(model_names: List[str], out_png: Path) -> None:
     _savefig(out_png)
 
 
-def make_runtime_summary(ablation_rows: List[Dict[str, float]]) -> None:
-    """Buat reports/tables/runtime_summary.csv dari ablation_rows."""
-    if not ablation_rows:
+def make_runtime_summary(runtime_rows: List[Dict[str, float]]) -> None:
+    """
+    Buat reports/tables/runtime_summary.csv yang berisi:
+    - dataset
+    - use_smote
+    - variant (nosmote / smote / smote_enn / smote_tomek)
+    - model (dt, rf, mlp, svm, nb, knn, stacking_lr_meta)
+    - fit_sec (waktu fit per model)
+    - grid_sec (hanya terisi untuk stacking)
+    - run_sec (durasi run_one, hanya diisi untuk stacking)
+    - thr, beta (hanya diisi untuk stacking)
+    """
+    if not runtime_rows:
         return
-    df = pd.DataFrame(ablation_rows)
+
+    df = pd.DataFrame(runtime_rows)
     cols = [
         "dataset",
         "use_smote",
         "variant",
-        "stack_fit_sec",
+        "model",
+        "fit_sec",
         "grid_sec",
         "run_sec",
         "thr",
@@ -714,6 +720,22 @@ def make_runtime_summary(ablation_rows: List[Dict[str, float]]) -> None:
     cols = [c for c in cols if c in df.columns]
     df_out = df[cols].copy()
     _savetab(df_out, TAB / "runtime_summary.csv")
+
+
+def _write_rows_csv(
+    rows: List[Dict[str, object]],
+    path: Path,
+    label: str,
+) -> None:
+    """
+    Helper kecil untuk menulis list-of-dicts menjadi CSV + log sekali.
+    Dipakai untuk ablation_smote & model_hyperparams.
+    """
+    if not rows:
+        return
+    df = pd.DataFrame(rows)
+    _savetab(df, path)
+    _log(f"[Stack] {label} written to {TAB}")
 
 
 # ---------------- Train & Eval ----------------
@@ -727,7 +749,7 @@ def fit_and_eval_single(name: str, clf, Xtr, ytr, Xte, yte) -> Dict[str, float]:
     m = _metrics(yte, pred, prob)
     m["model"] = name
     m["fit_sec"] = round(time.time() - t0, 3)
-    _log(f"[Stack]   > Done {name} in {m['fit_sec']:.2f}s | f1={m['f1']:.3f} rec={m['recall']:.3f}")
+    _log(f"[Stack]   > Done {name} in {m['fit_sec']:.2f}s | acc={m['accuracy']:.3f} prec={m['precision']:.3f}")
     return m
 
 
@@ -744,6 +766,7 @@ def run_one(
     top_n: int,
     meta_grid: bool,
     hyper_rows: Optional[List[Dict[str, str]]] = None,
+    runtime_rows: Optional[List[Dict[str, float]]] = None,
 ) -> Dict[str, float]:
     start_run = time.time()
     suffix = _variant_to_tag(smote_variant) if use_smote else "nosmote"
@@ -785,6 +808,7 @@ def run_one(
         random_state,
     )
 
+    # Base learners: dt, rf, mlp (opsional), svm, nb, knn
     base_learners = build_base_learners(random_state, with_xgb, with_mlp)
     is_volc = dataset.lower() == "volcanic"
 
@@ -874,14 +898,14 @@ def run_one(
     rows.append(m_stack)
     _log(
         f"[Stack]   > Done Stacking in {m_stack['fit_sec']:.2f}s | "
-        f"f1={m_stack['f1']:.3f} rec={m_stack['recall']:.3f}"
+        f"acc={m_stack['accuracy']:.3f} prec={m_stack['precision']:.3f}"
     )
 
     # --- Tabel metrics lengkap (+fit_sec) ---
     metrics_df = pd.DataFrame(rows)
-    if {"f1", "recall", "roc_auc"} <= set(metrics_df.columns):
+    if {"accuracy", "precision", "f1"} <= set(metrics_df.columns):
         metrics_df = metrics_df.sort_values(
-            ["f1", "recall", "roc_auc"],
+            ["accuracy", "precision", "f1"],
             ascending=False,
         )
     _savetab(metrics_df, p_metrics)
@@ -948,11 +972,28 @@ def run_one(
         compress=3,
     )
 
+    # --- Catat runtime per model (base + stacking) untuk runtime_summary.csv ---
+    if runtime_rows is not None:
+        for r in rows:
+            runtime_rows.append(
+                {
+                    "dataset": dataset,
+                    "use_smote": use_smote,
+                    "variant": suffix,  # nosmote / smote / smote_enn / smote_tomek
+                    "model": r.get("model", ""),
+                    "fit_sec": float(r.get("fit_sec", float("nan"))),
+                    "grid_sec": grid_sec if r.get("model") == "stacking_lr_meta" else 0.0,
+                    "run_sec": run_sec if r.get("model") == "stacking_lr_meta" else float("nan"),
+                    "thr": float(thr) if r.get("model") == "stacking_lr_meta" else float("nan"),
+                    "beta": beta,
+                }
+            )
+
     # --- Nilai untuk ablation_smote.csv (ringkas) ---
     return {
         "dataset": dataset,
         "use_smote": use_smote,
-        "variant": _variant_to_tag(smote_variant) if use_smote else "",
+        "variant": suffix,
         "accuracy": m_stack["accuracy"],
         "precision": m_stack["precision"],
         "recall": m_stack["recall"],
@@ -975,10 +1016,11 @@ def main():
     ap.add_argument("--cv", type=int, default=3)
     ap.add_argument("--random-state", type=int, default=42)
 
-    # Toggles: default = ON; bisa dimatikan dengan --no-xgb / --no-meta-grid
+    # Toggles: with_xgb dipertahankan hanya agar CLI lama tidak error,
+    # tapi NILAI ini diabaikan di build_base_learners (XGBoost tidak digunakan).
     ap.add_argument("--with-xgb", dest="with_xgb", action="store_true")
     ap.add_argument("--no-xgb", dest="with_xgb", action="store_false")
-    ap.set_defaults(with_xgb=True)
+    ap.set_defaults(with_xgb=False)
 
     ap.add_argument("--meta-grid", dest="meta_grid", action="store_true")
     ap.add_argument("--no-meta-grid", dest="meta_grid", action="store_false")
@@ -1017,6 +1059,7 @@ def main():
 
     ablation_rows: List[Dict[str, float]] = []
     hyper_rows: List[Dict[str, str]] = []
+    runtime_rows: List[Dict[str, float]] = []
 
     # Buat diagram arsitektur stacking sekali saja (pakai konfigurasi base learner default)
     example_learners = build_base_learners(args.random_state, with_xgb, args.with_mlp)
@@ -1042,6 +1085,7 @@ def main():
                     top_n=args.top_n,
                     meta_grid=meta_grid,
                     hyper_rows=hyper_rows,
+                    runtime_rows=runtime_rows,
                 )
             )
             # semua varian SMOTE (cek file)
@@ -1065,6 +1109,7 @@ def main():
                         top_n=args.top_n,
                         meta_grid=meta_grid,
                         hyper_rows=hyper_rows,
+                        runtime_rows=runtime_rows,
                     )
                 )
         else:
@@ -1091,20 +1136,26 @@ def main():
                     top_n=args.top_n,
                     meta_grid=meta_grid,
                     hyper_rows=hyper_rows,
+                    runtime_rows=runtime_rows,
                 )
             )
 
     # ====== OUTPUT RINGKASAN GLOBAL ======
-    if ablation_rows:
-        ablation_df = pd.DataFrame(ablation_rows)
-        _savetab(ablation_df, TAB / "ablation_smote.csv")
-        make_runtime_summary(ablation_rows)
-        _log(f"[Stack] ablation_smote.csv & runtime_summary.csv written to {TAB}")
+    _write_rows_csv(
+        rows=ablation_rows,
+        path=TAB / "ablation_smote.csv",
+        label="ablation_smote.csv",
+    )
 
-    if hyper_rows:
-        hyper_df = pd.DataFrame(hyper_rows)
-        _savetab(hyper_df, TAB / "model_hyperparams.csv")
-        _log(f"[Stack] model_hyperparams.csv written to {TAB}")
+    if runtime_rows:
+        make_runtime_summary(runtime_rows)
+        _log(f"[Stack] runtime_summary.csv written to {TAB}")
+
+    _write_rows_csv(
+        rows=hyper_rows,
+        path=TAB / "model_hyperparams.csv",
+        label="model_hyperparams.csv",
+    )
 
     _log(
         f"[DONE] Stacking pipeline finished.\n"

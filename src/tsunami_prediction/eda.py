@@ -47,8 +47,12 @@ def _info_to_txt(df: pd.DataFrame) -> str:
 
 def _load_dataset(name: str) -> pd.DataFrame:
     """
-    Ambil dataset hasil preprocessing/cleaning (bukan hasil FE).
-    Pastikan tidak ada duplikat nama kolom.
+    Ambil dataset hasil preprocessing/cleaning (bukan hasil FE spesifik).
+    Urutan prioritas:
+    1) <name>.csv             (clean)
+    2) <name>_cleaned.csv     (legacy)
+    3) <name>_biner.csv       (legacy)
+    4) <name>_preprocessed.csv
     """
     candidates = [
         PROCESSED / f"{name}.csv",               # hasil cleaning utama
@@ -68,6 +72,15 @@ def _load_dataset(name: str) -> pd.DataFrame:
 
 # ---------- EDA PRIMITIVES ----------
 def class_distribution(df: pd.DataFrame, target: str, name: str) -> None:
+    """
+    Tujuan:
+    - Menunjukkan keseimbangan / ketidakseimbangan kelas target (tsu=0 vs tsu=1).
+    - Dipakai untuk menjelaskan masalah class imbalance di tesis.
+
+    Output:
+    - CSV ringkasan jumlah & persentase per kelas.
+    - Bar chart distribusi kelas (visual utama, tanpa pie chart agar tidak redundant).
+    """
     if target not in df.columns:
         raise KeyError(f"[{name}] Target column '{target}' tidak ditemukan.")
 
@@ -82,25 +95,24 @@ def class_distribution(df: pd.DataFrame, target: str, name: str) -> None:
     ct["percent"] = (ct["count"] / total * 100).round(2)
     _savetab(ct, TAB / f"{name}_class_counts.csv")
 
-    # bar
+    # bar (visual utama untuk imbalance)
     plt.figure(figsize=(4.6, 3.4))
     ax = sns.countplot(x=target, data=df)
     ax.bar_label(ax.containers[0])
     plt.title(f"Class Distribution — {name}")
     _savefig(FIG / f"{name}_class_bar.png")
 
-    # pie
-    plt.figure(figsize=(4.2, 4.2))
-    labels = [
-        f"{int(v)} ({p:.1f}%)"
-        for v, p in zip(ct["count"].values, ct["percent"].values, strict=False)
-    ]
-    plt.pie(ct["count"].values, labels=labels, autopct="%.1f%%", startangle=90)
-    plt.title(f"Class Pie — {name}")
-    _savefig(FIG / f"{name}_class_pie.png")
-
 
 def missing_value_fraction(df: pd.DataFrame, name: str) -> None:
+    """
+    Tujuan:
+    - Menggambarkan kualitas data melalui proporsi missing value per kolom.
+    - Mendukung penjelasan pembersihan data di bagian preprocessing.
+
+    Output:
+    - CSV missing_fraction per kolom.
+    - Bar chart missing_fraction.
+    """
     mv = df.isna().mean().sort_values(ascending=False).rename("missing_fraction")
     mv_df = mv.rename_axis("column").reset_index()
     _savetab(mv_df, TAB / f"{name}_missing_fraction.csv")
@@ -117,6 +129,14 @@ def numeric_distributions(
     numeric_cols: list[str],
     name: str,
 ) -> None:
+    """
+    Tujuan:
+    - Menggambarkan bentuk distribusi fitur numerik (skewed, normal, multimodal).
+    - Membantu interpretasi skala & outlier sebelum pemodelan.
+
+    Output:
+    - Histogram + KDE per fitur numerik (tanpa boxplot global agar tidak terlalu ramai).
+    """
     numeric_cols = [c for c in numeric_cols if c in df.columns]
     if not numeric_cols:
         return
@@ -124,7 +144,6 @@ def numeric_distributions(
     cols = min(4, len(numeric_cols))
     rows = int(np.ceil(len(numeric_cols) / cols))
 
-    # hist
     plt.figure(figsize=(4 * cols, 2.8 * rows))
     for i, col in enumerate(numeric_cols, 1):
         plt.subplot(rows, cols, i)
@@ -133,17 +152,15 @@ def numeric_distributions(
     plt.suptitle(f"Histograms — {name}", y=1.02)
     _savefig(FIG / f"{name}_hists.png")
 
-    # box
-    plt.figure(figsize=(4 * cols, 2.8 * rows))
-    for i, col in enumerate(numeric_cols, 1):
-        plt.subplot(rows, cols, i)
-        sns.boxplot(x=df[col], orient="h")
-        plt.title(col)
-    plt.suptitle(f"Boxplots — {name}", y=1.02)
-    _savefig(FIG / f"{name}_boxplots.png")
-
 
 def correlation_heatmap(df: pd.DataFrame, numeric_cols: list[str], name: str) -> None:
+    """
+    Tujuan:
+    - (Opsional) Menunjukkan struktur korelasi antar fitur numerik saja.
+    - TIDAK dipanggil di run_full_eda agar tidak redundant dengan correlation_with_target.
+
+    Kalau ingin dipakai manual, panggil fungsi ini di skrip terpisah.
+    """
     use = [c for c in numeric_cols if c in df.columns]
     if len(use) < 2:
         return
@@ -172,7 +189,14 @@ def correlation_with_target(
     name: str,
 ) -> None:
     """
-    Matriks korelasi yang juga memasukkan kolom target (tsu).
+    Tujuan:
+    - Fokus pada hubungan linear antara fitur numerik dan target tsu.
+    - Dipakai sebagai dasar pemilihan fitur / interpretasi pentingnya variabel.
+
+    Output:
+    - CSV matriks korelasi (termasuk target).
+    - Heatmap korelasi (termasuk target) → ini yang bisa kamu jadikan gambar
+      di bab EDA untuk menjelaskan fitur mana yang paling berkorelasi dengan tsu.
     """
     cols = [c for c in numeric_cols if c in df.columns]
     if target in df.columns and target not in cols:
@@ -205,10 +229,14 @@ def pairplot_sample(
     max_rows: int = 800,
 ) -> None:
     """
-    Pairplot robust:
-    - hanya kolom numerik (kecuali hue)
-    - sample bila baris > max_rows
-    - skip jika <2 kolom numerik valid
+    Tujuan:
+    - Melihat hubungan pasangan fitur numerik sekaligus (pairwise),
+      sekaligus separability antara tsu=0 vs tsu=1.
+    - Digunakan sebagai visual kualitatif: apakah kelas tsunami membentuk cluster berbeda.
+
+    Catatan:
+    - Hanya pakai subset baris (max_rows) supaya tidak berat.
+    - Hanya numerik + hue (target).
     """
     use_cols = [c for c in cols if c in df.columns]
     if hue in use_cols:
@@ -253,7 +281,12 @@ def numeric_vs_target_distributions(
     outfile: str | None = None,
 ) -> None:
     """
-    Histogram fitur numerik dengan hue=target (tsu).
+    Tujuan:
+    - Menunjukkan perbedaan distribusi fitur numerik antara kelas tsu=0 dan tsu=1.
+    - Sangat relevan untuk menjelaskan mengapa fitur tertentu kuat membedakan tsunami.
+
+    Output:
+    - Histogram per fitur numerik dengan hue=target.
     """
     if target not in df.columns:
         return
@@ -290,7 +323,16 @@ def temporal_plots(
     name: str,
     target: str = "tsu",
 ) -> None:
-    """Jumlah kejadian per tahun (fokus tsu=1 kalau target tersedia)."""
+    """
+    Tujuan:
+    - Melihat tren jumlah kejadian tsunami (tsu=1) per tahun.
+    - Membantu menjelaskan pola sejarah (misal tahun-tahun dengan aktivitas tinggi).
+
+    Output:
+    - CSV hitungan kejadian per tahun.
+    - CSV tahun-tahun yang dianggap 'spike' (di atas mean + 2*std).
+    - Plot garis jumlah kejadian per tahun.
+    """
     if "year" not in df.columns:
         return
 
@@ -326,7 +368,13 @@ def temporal_plots(
 
 def spatial_scatter(df: pd.DataFrame, name: str, target: str = "tsu") -> None:
     """
-    Peta global sederhana (scatter lon/lat).
+    Tujuan:
+    - Memvisualisasikan sebaran spasial (longitude/latitude) kejadian tsunami.
+    - Menunjukkan konsentrasi wilayah rawan (misal cincin api Pasifik, dsb).
+
+    Output:
+    - Scatter plot global (fallback).
+    - Kalau environment support PyGMT + tilemap, akan memakai peta dunia.
     """
     import os
 
@@ -411,6 +459,10 @@ def _plot_top_counts(
     orient: str = "h",
     table_name: str | None = None,
 ) -> None:
+    """
+    Tujuan:
+    - Menampilkan kategori teratas (region, type, country, dsb) berdasarkan frekuensi.
+    """
     s = s.dropna()
     if s.empty:
         return
@@ -442,6 +494,11 @@ def _plot_top_mean(
     outfile: str,
     table_name: str,
 ) -> None:
+    """
+    Tujuan:
+    - Menunjukkan rata-rata nilai numerik (misal magnitudo atau VEI)
+      per kategori (negara) untuk top 10.
+    """
     s = series.sort_values(ascending=False).head(10)
     if s.empty:
         return
@@ -455,6 +512,12 @@ def _plot_top_mean(
 
 
 def categorical_and_country_plots(df_t: pd.DataFrame, df_v: pd.DataFrame) -> None:
+    """
+    Tujuan:
+    - Visual khusus kategori untuk mendukung narasi domain:
+      * Tektonik: region, negara dengan tsunami, rata-rata magnitudo.
+      * Vulkanik: type gunung api, negara dengan tsunami, rata-rata VEI.
+    """
     # Tektonik: top 8 region
     if "region" in df_t.columns:
         top = df_t["region"].value_counts().nlargest(8)
@@ -560,13 +623,79 @@ def _add_time_fields(df: pd.DataFrame) -> pd.DataFrame:
     return out
 
 
+# ---------- ENGINEERED FEATURES VISUAL ----------
+def engineered_feature_plots(df: pd.DataFrame, name: str, target: str = "tsu") -> None:
+    """
+    Tujuan:
+    - Mempertegas visualisasi untuk fitur hasil rekayasa (feature engineering),
+      misalnya jarak ke garis pantai, dsb.
+
+    Implementasi:
+    - Secara otomatis akan mencari kolom FE yang umum (misal: distance_to_coast_km).
+    - Bila ada, dibuat:
+        * histogram per kelas tsu (numeric_vs_target_distributions)
+        * korelasi dengan target.
+
+    Ini bisa kamu rujuk di bab Feature Engineering.
+    """
+    fe_candidates = [
+        "distance_to_coast_km",
+        # tambahkan di sini kalau kamu punya fitur rekayasa lain
+        # "max_wave_height",
+        # "time_to_coast_min",
+    ]
+    fe_cols = [c for c in fe_candidates if c in df.columns]
+    if not fe_cols:
+        return
+
+    numeric_vs_target_distributions(
+        df,
+        cols=fe_cols,
+        target=target,
+        name=name,
+        outfile=f"{name}_fe_num_vs_{target}.png",
+    )
+
+    # Korelasi fokal: FE dan target saja
+    cols = fe_cols + ([target] if target in df.columns else [])
+    corr = df[cols].corr(numeric_only=True)
+    _savetab(corr.reset_index().rename(columns={"index": "feature"}), TAB / f"{name}_fe_corr_with_target.csv")
+
+    plt.figure(figsize=(0.8 * len(cols) + 3, 0.8 * len(cols) + 3))
+    sns.heatmap(
+        corr,
+        cmap="coolwarm",
+        vmin=-1,
+        vmax=1,
+        annot=True,
+        fmt=".2f",
+        linewidths=0.3,
+    )
+    plt.title(f"Engineered Features Correlation with {target} — {name}")
+    _savefig(FIG / f"{name}_fe_corr_with_target.png")
+
+
 # ---------- MASTER RUN ----------
 def run_full_eda(df: pd.DataFrame, ds_name: str, target: str = "tsu") -> None:
+    """
+    Pipeline EDA lengkap untuk satu domain (tektonik / vulkanik).
+
+    Output utama per domain:
+    - Informasi struktur data (info, describe, head).
+    - Distribusi kelas (imbalance).
+    - Kualitas data (missing value).
+    - Distribusi fitur numerik.
+    - Korelasi fitur numerik + target (heatmap).
+    - Tren waktu kejadian tsunami (per tahun).
+    - Scatter spasial lon/lat.
+    - Visual tambahan spesifik domain (mag/depth untuk tektonik, VEI/eq untuk vulkanik).
+    - Visual fitur rekayasa (jika ada).
+    """
     # simpan basic info
     (TAB / f"{ds_name}_info.txt").write_text(_info_to_txt(df), encoding="utf-8")
     _savetab(df.head(20), TAB / f"{ds_name}_head20.csv")
     _savetab(
-        df.describe(include="all").T.reset_index().rename(columns={"index": "feature"}),  # noqa: E501
+        df.describe(include="all").T.reset_index().rename(columns={"index": "feature"}),
         TAB / f"{ds_name}_describe.csv",
     )
 
@@ -581,15 +710,24 @@ def run_full_eda(df: pd.DataFrame, ds_name: str, target: str = "tsu") -> None:
         if pd.api.types.is_numeric_dtype(df[c]) and c not in {target, "id"}
     ]
 
+    # 1) Distribusi kelas
     class_distribution(df, target, ds_name)
+
+    # 2) Kualitas data
     missing_value_fraction(df, ds_name)
+
+    # 3) Distribusi numerik umum
     numeric_distributions(df, numeric_cols, ds_name)
-    correlation_heatmap(df, numeric_cols, ds_name)
+
+    # 4) Korelasi fitur numerik dengan target (visual utama korelasi)
     correlation_with_target(df, numeric_cols, target, ds_name)
+    # (correlation_heatmap tidak dipanggil di sini untuk menghindari duplikasi fungsi)
+
+    # 5) Analisis temporal & spasial
     temporal_plots(df, ds_name, target=target)
     spatial_scatter(df, ds_name, target=target)
 
-    # visual khusus per dataset
+    # 6) Visual khusus per dataset
     if ds_name == "tectonic":
         numeric_vs_target_distributions(
             df,
@@ -611,6 +749,9 @@ def run_full_eda(df: pd.DataFrame, ds_name: str, target: str = "tsu") -> None:
 
     pairplot_sample(df, pp_cols, hue=target, name=ds_name)
 
+    # 7) Visual fitur rekayasa (jika ada, mis. distance_to_coast_km)
+    engineered_feature_plots(df, ds_name, target=target)
+
 
 def main(datasets: list[str]) -> None:
     _ensure_dirs()
@@ -628,6 +769,7 @@ def main(datasets: list[str]) -> None:
     for ds, df in dfs.items():
         run_full_eda(df, ds, target="tsu")
 
+    # Visual kategori lintas domain (negara, type, region)
     if "tectonic" in dfs and "volcanic" in dfs:
         categorical_and_country_plots(dfs["tectonic"], dfs["volcanic"])
 

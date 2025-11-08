@@ -18,12 +18,15 @@ from tsunami_prediction.schemas import TectonicRequest, VolcanicRequest
 
 app = FastAPI(
     title="Tsunami Disaster Prediction API",
-    description="API for predicting tsunamigenic events using stacking ensemble ML.",
-    version="2.0",
+    description=(
+        "API for predicting tsunamigenic events using a stacking ensemble "
+        "of classical machine learning models (tectonic & volcanic domains)."
+    ),
+    version="3.0",
     docs_url="/docs",
 )
 
-# ── CORS (dev) ────────────────────────────────────────────────────────────────
+# ── CORS (dev / demo) ─────────────────────────────────────────────────────────
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*", "http://localhost", "http://127.0.0.1:3000"],
@@ -68,12 +71,15 @@ async def root() -> HTMLResponse:
 @app.post(
     "/v1/predict/tectonic",
     tags=["Prediction"],
-    summary="Predict Tsunami from Tectonic Earthquake Data",
+    summary="Predict tsunamigenic potential from tectonic earthquake data",
 )
 def predict_tectonic(req: TectonicRequest) -> dict[str, list[float]]:
     if not req.datas:
         raise HTTPException(status_code=400, detail="Input 'datas' is empty.")
 
+    # NOTE:
+    # Kolom ini disesuaikan dengan TectonicItem di schemas.py dan
+    # akan diproses lagi di serve_api (feature engineering ringan + alignment).
     df_input = pd.DataFrame(
         [
             {
@@ -82,6 +88,7 @@ def predict_tectonic(req: TectonicRequest) -> dict[str, list[float]]:
                 "latitude": i.latitude,
                 "longitude": i.longitude,
                 "country": i.country,
+                # optional: hanya diisi kalau ada di body
                 "zone": getattr(i, "zone", None),
                 "distance_to_coast_km": i.distance_to_coast_km,
                 "is_subduction_zone": i.is_subduction_zone,
@@ -119,7 +126,7 @@ def predict_tectonic(req: TectonicRequest) -> dict[str, list[float]]:
 @app.post(
     "/v1/predict/volcanic",
     tags=["Prediction"],
-    summary="Predict Tsunami from Volcanic Eruption Data",
+    summary="Predict tsunamigenic potential from volcanic eruption data",
 )
 def predict_volcanic(req: VolcanicRequest) -> dict[str, list[float]]:
     if not req.datas:
@@ -145,6 +152,7 @@ def predict_volcanic(req: VolcanicRequest) -> dict[str, list[float]]:
     try:
         preds = predict_volcanic_stacking(df_input)
     except FileNotFoundError as exc:
+        # Artefak model belum ada
         raise HTTPException(status_code=500, detail=str(exc)) from exc
     except Exception as exc:  # noqa: BLE001
         raise HTTPException(

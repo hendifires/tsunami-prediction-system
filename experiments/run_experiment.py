@@ -3,12 +3,42 @@ from __future__ import annotations
 # cSpell:ignore yaml ohe
 
 """
-Runner serbaguna untuk eksperimen:
-- FE (feature_engineering)  -> tambah distance_to_coast_km (opsional) + OHE diagnostics
-- SMOTE (smote_pipeline)    -> buat ulang split train/test + varian SMOTE
-- STACK (stacking_pipeline) -> train Stacking + simpan threshold & artefak
+Runner serbaguna untuk eksperimen (berbasis configs.yaml):
 
-Konfigurasi dibaca dari experiments/configs.yaml
+- FE (feature_engineering)
+    -> tambah distance_to_coast_km (opsional) + OHE diagnostics
+- SMOTE (smote_pipeline)
+    -> buat ulang split train/test + varian SMOTE
+- STACK (stacking_pipeline)
+    -> train Stacking + simpan threshold & artefak
+
+Struktur konfigurasi (experiments/configs.yaml):
+
+global:
+  cv: 3
+  random_state: 42
+  with_xgb: false
+  with_mlp: true
+  feature_select: "none"
+  top_n: 30
+  meta_grid: true
+  fast: false
+  fast_n: 5000
+  collect_outputs: true
+
+seeds: [42]   # optional, override global.random_state per run
+
+runs:
+  - name: auto_best
+    datasets: ["tectonic", "volcanic"]
+    use_smote: "auto"
+    ablation: false
+
+  - name: ablation_full
+    datasets: ["tectonic", "volcanic"]
+    ablation: true
+
+dst.
 """
 
 import os
@@ -56,10 +86,24 @@ def load_cfg(path: Path) -> Dict[str, Any]:
 
 # ---------- Command builders ----------
 def build_fe_cmd(cfg: Dict[str, Any]) -> List[str]:
+    """
+    Bangun perintah untuk feature_engineering.
+
+    Konfigurasi opsional:
+
+    fe:
+      overwrite: true
+      materialize_ohe: true
+
+    paths:
+      coastline: "data/coastline/ne_10m_coastline.shp"
+    """
     fe = cfg.get("fe", {})
     coast = (cfg.get("paths", {}) or {}).get("coastline") or fe.get("coastline")
     cmd = [
-        sys.executable, "-m", "tsunami_prediction.feature_engineering",
+        sys.executable,
+        "-m",
+        "tsunami_prediction.feature_engineering",
         "--overwrite" if _str_bool(fe.get("overwrite", True)) else "",
         "--materialize-ohe" if _str_bool(fe.get("materialize_ohe", True)) else "",
     ]
@@ -70,77 +114,166 @@ def build_fe_cmd(cfg: Dict[str, Any]) -> List[str]:
 
 
 def build_smote_cmd(cfg: Dict[str, Any]) -> List[str]:
+    """
+    Bangun perintah untuk smote_pipeline.
+
+    Konfigurasi opsional:
+
+    smote:
+      overwrite: true
+    """
     sm = cfg.get("smote", {})
     cmd = [
-        sys.executable, "-m", "tsunami_prediction.smote_pipeline",
+        sys.executable,
+        "-m",
+        "tsunami_prediction.smote_pipeline",
         "--overwrite" if _str_bool(sm.get("overwrite", True)) else "",
     ]
     return [c for c in cmd if c]
 
 
-def build_stack_cmds(cfg: Dict[str, Any]) -> List[List[str]]:
-    st = cfg.get("stack", {})
-    datasets = cfg.get("datasets", ["tectonic", "volcanic"])
+def build_stack_cmds(
+    global_cfg: Dict[str, Any],
+    run_cfg: Dict[str, Any],
+    seed: int,
+) -> List[List[str]]:
+    """
+    Bangun list command untuk stacking_pipeline berdasarkan:
+    - global config (bagian 'global')
+    - konfigurasi run spesifik (entry di 'runs')
+    - nilai seed (override random_state)
+    """
 
-    base_cmd = [
-        sys.executable, "-m", "tsunami_prediction.stacking_pipeline",
-        "--cv", str(st.get("cv", 3)),
-        "--top-n", str(st.get("top_n", 30)),
-        "--feature-select", str(st.get("feature_select", "none")),
+    # helper: ambil nilai dari run_cfg, kalau tidak ada pakai global_cfg
+    def g(key: str, default: Any) -> Any:
+        if key in run_cfg:
+            return run_cfg[key]
+        return global_cfg.get(key, default)
+
+    datasets = run_cfg.get("datasets", ["tectonic", "volcanic"])
+
+    cv = int(g("cv", 3))
+    top_n = int(g("top_n", 30))
+    feature_select = str(g("feature_select", "none")).lower()
+
+    with_xgb = _str_bool(g("with_xgb", False))  # default: XGB dimatikan
+    with_mlp = _str_bool(g("with_mlp", False))
+
+    meta_grid = _str_bool(g("meta_grid", True))
+
+    fast = _str_bool(g("fast", False))
+    fast_n = int(g("fast_n", 5000))
+
+    use_smote = str(g("use_smote", "auto")).lower()  # auto|yes|no
+    ablation = _str_bool(g("ablation", False))
+
+    base_cmd: List[str] = [
+        sys.executable,
+        "-m",
+        "tsunami_prediction.stacking_pipeline",
+        "--cv",
+        str(cv),
+        "--top-n",
+        str(top_n),
+        "--feature-select",
+        feature_select,
+        "--random-state",
+        str(seed),
+        "--use-smote",
+        use_smote,
     ]
 
-    # toggles
-    base_cmd += ["--with-xgb"] if _str_bool(st.get("with_xgb", True)) else ["--no-xgb"]
-    base_cmd += ["--meta-grid"] if _str_bool(st.get("meta_grid", True)) else ["--no-meta-grid"]
-    if _str_bool(st.get("with_mlp", False)):
+    # toggles XGB (dipertahankan cuma untuk kompatibilitas; default False)
+    base_cmd += ["--with-xgb"] if with_xgb else ["--no-xgb"]
+
+    # meta-grid
+    base_cmd += ["--meta-grid"] if meta_grid else ["--no-meta-grid"]
+
+    # MLP sebagai base learner
+    if with_mlp:
         base_cmd += ["--with-mlp"]
-    if _str_bool(st.get("fast", False)):
-        base_cmd += ["--fast", "--fast-n", str(st.get("fast_n", 5000))]
 
-    use_smote = str(st.get("use_smote", "auto")).lower()
-    base_cmd += ["--use-smote", use_smote]
-
-    ablation = _str_bool(st.get("ablation", False))
+    # mode cepat
+    if fast:
+        base_cmd += ["--fast", "--fast-n", str(fast_n)]
 
     cmds: List[List[str]] = []
     for ds in datasets:
-        # ← inilah perbaikan yang menghapus warning:
-        cmd = base_cmd + ["--datasets", ds] + (["--ablation"] if ablation else [])
+        cmd = base_cmd + ["--datasets", ds]
+        if ablation:
+            cmd += ["--ablation"]
         cmds.append(cmd)
+
     return cmds
 
 
 # ---------- Main ----------
 def main() -> None:
-    cfg_path = ROOT / "experiments" / "configs.yaml"
+    import argparse
+
+    parser = argparse.ArgumentParser(description="Runner eksperimen stacking + SMOTE")
+    parser.add_argument(
+        "--config",
+        type=str,
+        default=str(ROOT / "experiments" / "configs.yaml"),
+        help="Path ke file konfigurasi YAML (default: experiments/configs.yaml)",
+    )
+    args = parser.parse_args()
+
+    cfg_path = Path(args.config)
     if not cfg_path.exists():
         raise SystemExit(f"Config tidak ditemukan: {cfg_path}")
 
     cfg = load_cfg(cfg_path)
+    global_cfg = cfg.get("global", {}) or {}
+    runs_cfg = cfg.get("runs", []) or []
 
-    steps = cfg.get("steps", {})
+    # steps opsional (kalau tidak ada, semua dianggap True)
+    steps = cfg.get("steps", {}) or {}
     do_fe = _str_bool(steps.get("fe", True))
     do_sm = _str_bool(steps.get("smote", True))
     do_st = _str_bool(steps.get("stack", True))
 
-    _log("[Runner] Mulai eksperimen…")
+    # seeds untuk random_state stacking
+    seeds = cfg.get("seeds") or [int(global_cfg.get("random_state", 42))]
 
+    # kalau tidak ada runs didefinisikan, buat satu run default
+    if not runs_cfg:
+        runs_cfg = [
+            {
+                "name": "default",
+                "datasets": ["tectonic", "volcanic"],
+                "use_smote": "auto",
+                "ablation": False,
+            }
+        ]
+
+    _log(f"[Runner] Mulai eksperimen (config={cfg_path}) …")
+
+    # 1) Feature Engineering
     if do_fe:
         _log("[Runner] 1) Feature Engineering")
         run_cmd(build_fe_cmd(cfg))
     else:
         _log("[Runner] 1) Feature Engineering — dilewati")
 
+    # 2) SMOTE pipeline
     if do_sm:
         _log("[Runner] 2) SMOTE pipeline")
         run_cmd(build_smote_cmd(cfg))
     else:
         _log("[Runner] 2) SMOTE pipeline — dilewati")
 
+    # 3) Stacking runs (loop over runs x seeds)
     if do_st:
-        _log("[Runner] 3) Stacking pipeline")
-        for cmd in build_stack_cmds(cfg):
-            run_cmd(cmd)
+        _log("[Runner] 3) Stacking pipeline (multi-run / multi-seed)")
+        for run_cfg in runs_cfg:
+            name = str(run_cfg.get("name", "run"))
+            for seed in seeds:
+                _log(f"[Runner]   -> Run='{name}' | seed={seed}")
+                cmds = build_stack_cmds(global_cfg, run_cfg, seed)
+                for cmd in cmds:
+                    run_cmd(cmd)
     else:
         _log("[Runner] 3) Stacking pipeline — dilewati")
 
