@@ -25,7 +25,8 @@ param(
   [switch]$Fast,
   [int]$FastN = 5000,
   [ValidateSet("none","pearson","rfe")] [string]$FeatureSelect = "none",
-  [int]$TopN = 30
+  [int]$TopN = 30,
+  [switch]$MetaGrid   # NEW: kalau mau nyalain grid search meta-learner
 )
 
 $ErrorActionPreference = "Stop"
@@ -109,8 +110,12 @@ Invoke-Step "5) Stacking (train + threshold tuning)" {
     "--use-smote", $UseSmote
   )
 
-  # meta-grid ON (XGBoost sudah tidak dipakai)
-  $stackArgs += @("--meta-grid")
+  # meta-grid OFF secara default (lebih cepat); bisa dinyalakan dengan -MetaGrid
+  if ($MetaGrid) {
+    $stackArgs += "--meta-grid"
+  } else {
+    $stackArgs += "--no-meta-grid"
+  }
 
   if ($WithMLP) { $stackArgs += "--with-mlp" }
   if ($Fast)    { $stackArgs += @("--fast","--fast-n",$FastN) }

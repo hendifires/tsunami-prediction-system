@@ -149,7 +149,10 @@ def build_stack_cmds(
 
     # Tidak ada XGBoost lagi
     with_mlp = _str_bool(g("with_mlp", True))
-    meta_grid = _str_bool(g("meta_grid", True))
+
+    # Default meta_grid = False (biar lebih ringan, bisa di-ON di configs.yaml)
+    meta_grid = _str_bool(g("meta_grid", False))
+
     fast = _str_bool(g("fast", False))
     fast_n = int(g("fast_n", 5000))
 

@@ -10,9 +10,11 @@ Stacking Ensemble Pipeline + SMOTE Ablation (fast & robust)
 - Aggregated ablation: reports/tables/ablation_smote.csv
 
 Tambahan:
-- Waktu: fit_sec (per model + stacking), grid_sec (meta-grid), run_sec (durasi total).
+- Waktu: fit_sec (per model + stacking), grid_sec (meta-grid, default dimatikan),
+  run_sec (durasi total).
 - Simpan confusion matrix sebagai gambar (reports/figures) dan CSV (reports/tables).
-- Cari decision_threshold optimal (F-beta) via OOF CV; disimpan ke artifact (dipakai serve_api).
+- Cari decision_threshold optimal (F-beta) via OOF CV; disimpan ke artifact
+  (dipakai serve_api).
 - Kebijakan threshold:
   * Volcanic: precision-leaning (beta=0.75, min_precision=0.88).
   * Tectonic: balanced (beta=1.0, tanpa syarat min_precision).
@@ -250,7 +252,9 @@ def load_split(
 
     if not p_tr.exists() or not p_te.exists():
         missing = " ".join(
-            name for path, name in ((p_tr, p_tr.name), (p_te, p_te.name)) if not path.exists()
+            name
+            for path, name in ((p_tr, p_tr.name), (p_te, p_te.name))
+            if not path.exists()
         )
         raise FileNotFoundError(
             f"[Stack] Split not found. Run smote_pipeline first. Missing: {missing}"
@@ -399,7 +403,8 @@ def build_base_learners(
     - dt  : DecisionTreeClassifier
     - rf  : RandomForestClassifier
     - mlp : MLPClassifier (opsional, diaktifkan lewat --with-mlp)
-    - svm : SVC dengan probability=True
+    - svm : SVC (kernel RBF, probability=False → lebih cepat,
+                 dipakai via decision_function di stacking)
     - nb  : GaussianNB
     - knn : KNeighborsClassifier
 
@@ -453,7 +458,7 @@ def build_base_learners(
                             kernel="rbf",
                             C=1.0,
                             gamma="scale",
-                            probability=True,
+                            probability=False,  # <<< lebih cepat, pakai decision_function
                             class_weight="balanced",
                             random_state=random_state,
                         ),
@@ -501,7 +506,7 @@ def build_stacking(
         final_estimator=LogisticRegression(max_iter=8000, class_weight="balanced"),
         cv=cv,
         passthrough=passthrough,
-        stack_method="predict_proba",
+        stack_method="auto",  # <<< auto: proba jika ada, else decision_function/predict
         n_jobs=1,
     )
 
@@ -1089,7 +1094,8 @@ def main() -> None:
 
     ap.add_argument("--meta-grid", dest="meta_grid", action="store_true")
     ap.add_argument("--no-meta-grid", dest="meta_grid", action="store_false")
-    ap.set_defaults(meta_grid=True)
+    # default sekarang: meta-grid dimatikan (lebih cepat)
+    ap.set_defaults(meta_grid=False)
 
     ap.add_argument("--with-mlp", action="store_true")
     ap.add_argument(

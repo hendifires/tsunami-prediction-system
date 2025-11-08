@@ -1,6 +1,7 @@
 # Experiments matrix for stacking_pipeline
 # Versi tesis: fokus pada base learner klasik
 # (Decision Tree, Random Forest, MLP, SVM, Naive Bayes, KNN)
+# Tidak ada XGBoost sama sekali.
 
 global:
   cv: 3
@@ -14,8 +15,10 @@ global:
   feature_select: "none"
   top_n: 30
 
-  # Grid search untuk meta-learner (Logistic Regression)
-  meta_grid: true
+  # Grid search untuk meta-learner (Logistic Regression).
+  # Dibuat false supaya training lebih ringan dan cepat.
+  # Kalau nanti ingin eksperimen serius, bisa set ke true.
+  meta_grid: false
 
   # true untuk debug cepat (subsample train)
   fast: false
@@ -34,12 +37,15 @@ runs:
     datasets: ["tectonic", "volcanic"]
     use_smote: "auto"     # auto | yes | no
     ablation: false
+    # kalau mau nyalakan grid khusus run ini:
+    # meta_grid: true
 
   # Ablation penuh: nosmote + smote + smote_tomek + smote_enn
   - name: ablation_full
     datasets: ["tectonic", "volcanic"]
     use_smote: "auto"
     ablation: true        # akan jalankan semua varian SMOTE
+    # meta_grid: false    # eksplisit matikan grid (opsional, karena global sudah false)
 
   # Contoh run spesifik volcanic (tanpa SMOTE)
   - name: volcanic_nosmote_only
