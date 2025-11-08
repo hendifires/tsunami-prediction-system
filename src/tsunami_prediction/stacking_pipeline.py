@@ -5,7 +5,7 @@ from __future__ import annotations
 Stacking Ensemble Pipeline + SMOTE Ablation (fast & robust)
 
 - Compare: non-SMOTE vs SMOTE variants (smote, smote_tomek, smoteenn) per dataset.
-- Metrics: Accuracy, Precision, Recall, F1, ROC-AUC, PR-AUC, FN.
+- Metrics: Accuracy, Precision, Recall, F1, ROC-AUC, PR-AUC, Brier, FN.
 - Outputs per run: metrics.csv, preds.csv, CM/ROC/PR figures, model.joblib
 - Aggregated ablation: reports/tables/ablation_smote.csv
 
@@ -49,6 +49,7 @@ import warnings
 from sklearn.exceptions import ConvergenceWarning
 
 import matplotlib
+
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 from matplotlib.patches import FancyBboxPatch, FancyArrowPatch
@@ -72,9 +73,16 @@ from sklearn.ensemble import (
 from sklearn.svm import SVC
 from sklearn.model_selection import GridSearchCV, cross_val_predict
 from sklearn.metrics import (
-    accuracy_score, precision_score, recall_score, f1_score,
-    roc_auc_score, average_precision_score, confusion_matrix,
-    roc_curve, precision_recall_curve,
+    accuracy_score,
+    precision_score,
+    recall_score,
+    f1_score,
+    roc_auc_score,
+    average_precision_score,
+    confusion_matrix,
+    roc_curve,
+    precision_recall_curve,
+    brier_score_loss,
 )
 
 # ---- tame noisy warnings (tidak mempengaruhi hasil) ----
@@ -89,18 +97,23 @@ REPORTS = ROOT / "reports"
 TAB = REPORTS / "tables"
 FIG = REPORTS / "figures"
 ART = ROOT / "artifacts"
-for p in [PROCESSED, TAB, FIG, ART]:
+for p in (PROCESSED, TAB, FIG, ART):
     p.mkdir(parents=True, exist_ok=True)
 
 # ---------- SMOTE tag helper ----------
-_TAG_MAP = {"smote": "smote", "smote_tomek": "smote_tomek", "smoteenn": "smote_enn"}
+_TAG_MAP: Dict[str, str] = {
+    "smote": "smote",
+    "smote_tomek": "smote_tomek",
+    "smoteenn": "smote_enn",
+}
 
 
 def _variant_to_tag(variant: Optional[str]) -> str:
-    return _TAG_MAP.get((variant or "smote").lower(), (variant or "smote").lower())
+    base = (variant or "smote").lower()
+    return _TAG_MAP.get(base, base)
 
 
-SMOTE_VARIANTS = ["smote", "smote_tomek", "smoteenn"]
+SMOTE_VARIANTS: List[str] = ["smote", "smote_tomek", "smoteenn"]
 
 # ---------------- Utils ----------------
 def _log(msg: str) -> None:
@@ -123,41 +136,69 @@ def _savefig(path: Path) -> None:
     plt.close()
 
 
-def _safe_proba(model, X) -> np.ndarray:
+def _safe_proba(model: object, X: pd.DataFrame) -> np.ndarray:
     if hasattr(model, "predict_proba"):
         p = model.predict_proba(X)
         return p[:, 1] if p.ndim == 2 else p
     if hasattr(model, "decision_function"):
         z = np.clip(model.decision_function(X), -20, 20)
         return 1.0 / (1.0 + np.exp(-z))
-    return model.predict(X)
+    return model.predict(X)  # type: ignore[no-any-return]
 
 
-def _metrics(y_true: np.ndarray, y_pred: np.ndarray, y_prob: Optional[np.ndarray]) -> Dict[str, float]:
+def _metrics(
+    y_true: np.ndarray,
+    y_pred: np.ndarray,
+    y_prob: Optional[np.ndarray],
+) -> Dict[str, float]:
     out: Dict[str, float] = {
         "accuracy": accuracy_score(y_true, y_pred),
         "precision": precision_score(y_true, y_pred, zero_division=0),
         "recall": recall_score(y_true, y_pred, zero_division=0),
         "f1": f1_score(y_true, y_pred, zero_division=0),
     }
+
     if y_prob is not None:
-        with suppress(Exception):
-            out["roc_auc"] = roc_auc_score(y_true, y_prob)
-        with suppress(Exception):
-            out["pr_auc"] = average_precision_score(y_true, y_prob)
-        out.setdefault("roc_auc", float("nan"))
-        out.setdefault("pr_auc", float("nan"))
+        # hitung metric yang berbasis probabilitas dengan pola yang sama
+        prob_metrics = {
+            "roc_auc": roc_auc_score,
+            "pr_auc": average_precision_score,
+            "brier": brier_score_loss,
+        }
+        for name, fn in prob_metrics.items():
+            with suppress(Exception):
+                out[name] = fn(y_true, y_prob)
+
+        for name in ("roc_auc", "pr_auc", "brier"):
+            out.setdefault(name, float("nan"))
     else:
-        out.update({"roc_auc": float("nan"), "pr_auc": float("nan")})
+        out.update(
+            {
+                "roc_auc": float("nan"),
+                "pr_auc": float("nan"),
+                "brier": float("nan"),
+            }
+        )
+
     tn, fp, fn, tp = confusion_matrix(y_true, y_pred, labels=[0, 1]).ravel()
-    out.update({"tn": tn, "fp": fp, "fn": fn, "tp": tp})
+    out.update({"tn": float(tn), "fp": float(fp), "fn": float(fn), "tp": float(tp)})
     return out
 
 
 # -------- Sanitize feature names for Stacking --------
-_BAD_CHARS = {
-    "[": "(", "]": ")", "<": "_lt_", ">": "_gt_", "{": "(", "}": ")",
-    "/": "_", "\\": "_", ":": "_", ";": "_", ",": "_", "=": "_",
+_BAD_CHARS: Dict[str, str] = {
+    "[": "(",
+    "]": ")",
+    "<": "_lt_",
+    ">": "_gt_",
+    "{": "(",
+    "}": ")",
+    "/": "_",
+    "\\": "_",
+    ":": "_",
+    ";": "_",
+    ",": "_",
+    "=": "_",
 }
 
 
@@ -171,12 +212,12 @@ def _safe_name(name: object) -> str:
 def sanitize_df_pair(
     Xtr: pd.DataFrame,
     Xte: pd.DataFrame,
-) -> tuple[pd.DataFrame, pd.DataFrame, dict[str, str]]:
+) -> Tuple[pd.DataFrame, pd.DataFrame, Dict[str, str]]:
     """Samakan & sanitasi nama kolom untuk train/test."""
     ori_cols = list(Xtr.columns)
-    new_cols: list[str] = []
+    new_cols: List[str] = []
     used: set[str] = set()
-    mapping: dict[str, str] = {}
+    mapping: Dict[str, str] = {}
 
     for c in ori_cols:
         base = _safe_name(c)
@@ -212,8 +253,12 @@ def load_split(
     p_te = PROCESSED / f"{dataset}_test.csv"
 
     if not p_tr.exists() or not p_te.exists():
-        missing = " ".join(n for p, n in [(p_tr, p_tr.name), (p_te, p_te.name)] if not p.exists())
-        raise FileNotFoundError(f"[Stack] Split not found. Run smote_pipeline first. Missing: {missing}")
+        missing = " ".join(
+            name for path, name in ((p_tr, p_tr.name), (p_te, p_te.name)) if not path.exists()
+        )
+        raise FileNotFoundError(
+            f"[Stack] Split not found. Run smote_pipeline first. Missing: {missing}"
+        )
 
     df_tr, df_te = _read_csv(p_tr), _read_csv(p_te)
     if "tsu" not in df_tr.columns or "tsu" not in df_te.columns:
@@ -243,7 +288,7 @@ def pearson_topn(
         _savetab(pd.DataFrame(columns=["feature", "abs_corr"]), out_tab)
         return list(X.columns)
 
-    vals: List[tuple[str, float]] = []
+    vals: List[Tuple[str, float]] = []
     yv = y.to_numpy()
     for c in num_cols:
         xc = X[c].to_numpy()
@@ -255,6 +300,7 @@ def pearson_topn(
     corr_df = (
         pd.DataFrame(vals, columns=["feature", "abs_corr"])
         .sort_values("abs_corr", ascending=False)
+        .reset_index(drop=True)
     )
     _savetab(corr_df, out_tab)
     top = corr_df.head(top_n)
@@ -338,7 +384,7 @@ def maybe_feature_select(
 
 
 # ---------------- Helpers (non-lambda, picklable) ----------------
-def to_np_writable(X):
+def to_np_writable(X: object) -> np.ndarray:
     arr = np.asarray(X, dtype=float)
     if not arr.flags.writeable:
         arr = arr.copy()
@@ -348,7 +394,7 @@ def to_np_writable(X):
 # ---------------- Models ----------------
 def build_base_learners(
     random_state: int,
-    with_xgb: bool,   # disimpan hanya untuk kompatibilitas CLI, TIDAK digunakan
+    with_xgb: bool,  # dipertahankan hanya untuk kompatibilitas CLI, TIDAK digunakan
     with_mlp: bool,
 ) -> List[Tuple[str, object]]:
     """
@@ -363,11 +409,14 @@ def build_base_learners(
     - knn : KNeighborsClassifier
 
     Logistic Regression hanya dipakai sebagai meta-learner di Stacking.
-    XGBoost tidak digunakan lagi.
+    XGBoost tidak digunakan lagi (argumen with_xgb diabaikan).
     """
+    # "Gunakan" with_xgb supaya tidak dianggap unused oleh linter/IDE
+    if with_xgb:
+        _log("[Stack] with_xgb flag is ignored in this version (XGBoost not used).")
+
     to_np_tf = FunctionTransformer(to_np_writable, validate=False)
 
-    # Base learners yang selalu dipakai
     learners: List[Tuple[str, object]] = [
         (
             "knn",
@@ -479,7 +528,7 @@ def _f_beta(
     rec = recall_score(y_true, y_pred, zero_division=0)
     if prec == 0 and rec == 0:
         return 0.0, prec, rec
-    b2 = beta ** 2
+    b2 = beta**2
     fbeta = (
         (1 + b2) * (prec * rec) / (b2 * prec + rec)
         if (b2 * prec + rec) > 0
@@ -512,7 +561,7 @@ def find_best_threshold(
 ) -> float:
     """Sweep threshold & pilih yang memaksimalkan F-beta (opsional: syarat min precision)."""
     grid = np.linspace(0.01, 0.99, 99)
-    rows = []
+    rows: List[Tuple[float, float, float, float]] = []
     for t in grid:
         f, p, r = _f_beta(y_true, y_prob, t, beta)
         rows.append((t, f, p, r))
@@ -536,7 +585,12 @@ def find_best_threshold(
 
 
 # ---------------- Plots ----------------
-def plot_confusion(y_true: np.ndarray, y_pred: np.ndarray, title: str, out_png: Path) -> None:
+def plot_confusion(
+    y_true: np.ndarray,
+    y_pred: np.ndarray,
+    title: str,
+    out_png: Path,
+) -> None:
     cm = confusion_matrix(y_true, y_pred, labels=[0, 1])
     plt.figure(figsize=(4.8, 4.2))
     plt.imshow(cm, interpolation="nearest")
@@ -550,7 +604,12 @@ def plot_confusion(y_true: np.ndarray, y_pred: np.ndarray, title: str, out_png: 
     _savefig(out_png)
 
 
-def plot_roc(y_true: np.ndarray, y_prob: np.ndarray, title: str, out_png: Path) -> None:
+def plot_roc(
+    y_true: np.ndarray,
+    y_prob: np.ndarray,
+    title: str,
+    out_png: Path,
+) -> None:
     fpr, tpr, _ = roc_curve(y_true, y_prob)
     plt.figure(figsize=(5.6, 4.2))
     plt.plot(fpr, tpr)
@@ -561,7 +620,12 @@ def plot_roc(y_true: np.ndarray, y_prob: np.ndarray, title: str, out_png: Path) 
     _savefig(out_png)
 
 
-def plot_pr(y_true: np.ndarray, y_prob: np.ndarray, title: str, out_png: Path) -> None:
+def plot_pr(
+    y_true: np.ndarray,
+    y_prob: np.ndarray,
+    title: str,
+    out_png: Path,
+) -> None:
     precision, recall, _ = precision_recall_curve(y_true, y_prob)
     plt.figure(figsize=(5.6, 4.2))
     plt.plot(recall, precision)
@@ -614,7 +678,7 @@ def plot_stacking_architecture(model_names: List[str], out_png: Path) -> None:
     if not model_names:
         return
 
-    fig, ax = plt.subplots(figsize=(7.0, 3.5 + 0.25 * len(model_names)))
+    _, ax = plt.subplots(figsize=(7.0, 3.5 + 0.25 * len(model_names)))
     ax.set_xlim(0, 1)
     ax.set_ylim(0, 1)
     ax.axis("off")
@@ -739,17 +803,27 @@ def _write_rows_csv(
 
 
 # ---------------- Train & Eval ----------------
-def fit_and_eval_single(name: str, clf, Xtr, ytr, Xte, yte) -> Dict[str, float]:
+def fit_and_eval_single(
+    name: str,
+    clf: object,
+    Xtr: pd.DataFrame,
+    ytr: pd.Series,
+    Xte: pd.DataFrame,
+    yte: pd.Series,
+) -> Dict[str, float]:
     t0 = time.time()
     _log(f"[Stack]   > Fit {name} …")
     model = clone(clf)
     model.fit(Xtr, ytr)
     pred = model.predict(Xte)
     prob = _safe_proba(model, Xte)
-    m = _metrics(yte, pred, prob)
+    m = _metrics(yte.to_numpy(), pred.astype(int), prob)
     m["model"] = name
     m["fit_sec"] = round(time.time() - t0, 3)
-    _log(f"[Stack]   > Done {name} in {m['fit_sec']:.2f}s | acc={m['accuracy']:.3f} prec={m['precision']:.3f}")
+    _log(
+        "[Stack]   > Done %s in %.2fs | acc=%.3f prec=%.3f"
+        % (name, m["fit_sec"], m["accuracy"], m["precision"])
+    )
     return m
 
 
@@ -793,7 +867,8 @@ def run_one(
 
     if fast_sample is not None and len(Xtr) > fast_sample:
         _log(f"[Stack]   > FAST mode sample {fast_sample}/{len(Xtr)}")
-        idx = np.random.RandomState(42).choice(len(Xtr), size=fast_sample, replace=False)
+        rng = np.random.RandomState(42)
+        idx = rng.choice(len(Xtr), size=fast_sample, replace=False)
         Xtr = Xtr.iloc[idx]
         ytr = ytr.iloc[idx]
 
@@ -816,7 +891,7 @@ def run_one(
     stack = build_stacking(base_learners, cv, passthrough=(not is_volc))
 
     grid_sec = 0.0
-    best_meta = None
+    best_meta: Optional[Dict[str, object]] = None
     if meta_grid:
         _log("[Stack]   > Grid meta-learner …")
         param_grid = {
@@ -855,6 +930,7 @@ def run_one(
     y_prob_test = _safe_proba(stack, Xte)
 
     _log("[Stack]   > Cross-val predict for threshold …")
+    y_prob_oof: Optional[np.ndarray] = None
     with suppress(Exception):
         oof = cross_val_predict(
             stack,
@@ -864,16 +940,16 @@ def run_one(
             cv=cv,
             n_jobs=1,
         )
-        y_prob_oof = oof[:, 1] if oof.ndim == 2 else oof
+        y_prob_oof = oof[:, 1] if oof.ndim == 2 else oof  # type: ignore[index]
 
-    if "y_prob_oof" not in locals():
+    if y_prob_oof is None:
         _log("[WARN] cross_val_predict failed; fallback: in-sample prob for threshold")
         y_prob_oof = _safe_proba(stack, Xtr)
 
     # ---------- Threshold policy ----------
     if is_volc:
         beta = 0.75       # tekankan precision
-        min_prec = 0.88   # minimal precision untuk pilihan threshold
+        min_prec: Optional[float] = 0.88   # minimal precision untuk pilihan threshold
     else:
         beta = 1.0
         min_prec = None   # tectonic: seimbang
@@ -887,7 +963,10 @@ def run_one(
         out_csv=p_thr_csv,
         out_png=p_thr_png,
     )
-    _log(f"[Stack]   > Best threshold = {thr:.3f} (beta={beta}, min_precision={min_prec})")
+    _log(
+        f"[Stack]   > Best threshold = {thr:.3f} "
+        f"(beta={beta}, min_precision={min_prec})"
+    )
 
     # Prediksi test memakai threshold terbaik
     y_pred = (y_prob_test >= thr).astype(int)
@@ -975,16 +1054,18 @@ def run_one(
     # --- Catat runtime per model (base + stacking) untuk runtime_summary.csv ---
     if runtime_rows is not None:
         for r in rows:
+            model_name = r.get("model", "")
+            is_stack = model_name == "stacking_lr_meta"
             runtime_rows.append(
                 {
                     "dataset": dataset,
                     "use_smote": use_smote,
                     "variant": suffix,  # nosmote / smote / smote_enn / smote_tomek
-                    "model": r.get("model", ""),
+                    "model": model_name,
                     "fit_sec": float(r.get("fit_sec", float("nan"))),
-                    "grid_sec": grid_sec if r.get("model") == "stacking_lr_meta" else 0.0,
-                    "run_sec": run_sec if r.get("model") == "stacking_lr_meta" else float("nan"),
-                    "thr": float(thr) if r.get("model") == "stacking_lr_meta" else float("nan"),
+                    "grid_sec": grid_sec if is_stack else 0.0,
+                    "run_sec": run_sec if is_stack else float("nan"),
+                    "thr": float(thr) if is_stack else float("nan"),
                     "beta": beta,
                 }
             )
@@ -994,14 +1075,15 @@ def run_one(
         "dataset": dataset,
         "use_smote": use_smote,
         "variant": suffix,
-        "accuracy": m_stack["accuracy"],
-        "precision": m_stack["precision"],
-        "recall": m_stack["recall"],
-        "f1": m_stack["f1"],
-        "roc_auc": m_stack["roc_auc"],
-        "pr_auc": m_stack["pr_auc"],
-        "fn": m_stack["fn"],
-        "stack_fit_sec": m_stack["fit_sec"],
+        "accuracy": float(m_stack["accuracy"]),
+        "precision": float(m_stack["precision"]),
+        "recall": float(m_stack["recall"]),
+        "f1": float(m_stack["f1"]),
+        "roc_auc": float(m_stack["roc_auc"]),
+        "pr_auc": float(m_stack["pr_auc"]),
+        "brier": float(m_stack.get("brier", float("nan"))),
+        "fn": float(m_stack["fn"]),
+        "stack_fit_sec": float(m_stack["fit_sec"]),
         "grid_sec": grid_sec,
         "run_sec": run_sec,
         "thr": float(thr),
@@ -1010,7 +1092,7 @@ def run_one(
 
 
 # ---------------- CLI ----------------
-def main():
+def main() -> None:
     ap = argparse.ArgumentParser(description="Stacking Ensemble + SMOTE ablation")
     ap.add_argument("--datasets", nargs="+", default=["tectonic", "volcanic"])
     ap.add_argument("--cv", type=int, default=3)

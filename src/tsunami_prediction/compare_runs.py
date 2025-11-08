@@ -1,5 +1,5 @@
 from __future__ import annotations
-# cSpell:ignore nosmote tomek smoteenn utama Tambahan
+# cSpell:ignore nosmote tomek smoteenn utama
 
 """
 Compare multiple stacking runs (nosmote / smote / smote_tomek / smote_enn)
@@ -21,8 +21,8 @@ Selection rule per metrics file:
 Tambahan untuk analisis SMOTE:
 - reports/tables/smote_effects_by_variant.csv
     Efek SMOTE per varian terhadap baseline nosmote:
-    berisi nilai baseline & varian serta delta untuk accuracy,
-    precision, recall, f1, roc_auc, pr_auc.
+    berisi nilai baseline & varian serta delta untuk
+    accuracy, precision, recall, f1, roc_auc, pr_auc, brier.
 - reports/figures/smote_effects_f1.png
     Bar plot delta F1 per varian & dataset.
 
@@ -42,6 +42,7 @@ import pandas as pd
 
 # Matplotlib only for chart; safe for headless.
 import matplotlib
+
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt  # noqa: E402
 
@@ -50,21 +51,22 @@ ROOT = Path(__file__).resolve().parents[2]
 REPORTS = ROOT / "reports"
 TAB = REPORTS / "tables"
 FIG = REPORTS / "figures"
-for p in [TAB, FIG]:
+for p in (TAB, FIG):
     p.mkdir(parents=True, exist_ok=True)
 
 # ---------------- Constants ----------------
-VARIANT_TAGS = ["nosmote", "smote", "smote_tomek", "smote_enn"]
-DATASETS = ["tectonic", "volcanic"]
+VARIANT_TAGS: List[str] = ["nosmote", "smote", "smote_tomek", "smote_enn"]
+DATASETS: List[str] = ["tectonic", "volcanic"]
 
 # Expected metric columns (sinkron dengan stacking_pipeline.py)
-_METRIC_COLS = [
+_METRIC_COLS: List[str] = [
     "accuracy",
     "precision",
     "recall",
     "f1",
     "roc_auc",
     "pr_auc",
+    "brier",
     "tn",
     "fp",
     "fn",
@@ -73,7 +75,15 @@ _METRIC_COLS = [
     "grid_sec",  # waktu meta-grid untuk stacking (NaN/0 untuk model lain)
 ]
 
-_METRICS_MAIN = ["accuracy", "precision", "recall", "f1", "roc_auc", "pr_auc"]
+_METRICS_MAIN: List[str] = [
+    "accuracy",
+    "precision",
+    "recall",
+    "f1",
+    "roc_auc",
+    "pr_auc",
+    "brier",
+]
 
 # ---------------- Utils ----------------
 def _log(msg: str) -> None:
@@ -124,8 +134,8 @@ def _pick_row(df: pd.DataFrame) -> pd.Series:
 def _read_metrics(path: Path) -> pd.Series | None:
     try:
         df = pd.read_csv(path)
-    except Exception as e:  # hanya logging
-        _log(f"[WARN] failed to read {path.name}: {e}")
+    except Exception as exc:  # hanya logging, jangan mati
+        _log(f"[WARN] failed to read {path.name}: {exc}")
         return None
 
     if df.empty:
@@ -135,9 +145,9 @@ def _read_metrics(path: Path) -> pd.Series | None:
     row = _pick_row(df)
 
     # pastikan kolom metrik & waktu ada; isi NaN jika tidak
-    for c in _METRIC_COLS:
-        if c not in row.index:
-            row[c] = np.nan
+    for col in _METRIC_COLS:
+        if col not in row.index:
+            row[col] = np.nan
     return row
 
 
@@ -146,7 +156,7 @@ def collect(datasets: List[str], variants: List[str]) -> pd.DataFrame:
     Kumpulkan satu baris stacking per (dataset, variant) dari:
     reports/tables/<dataset>_stack_<variant}_metrics.csv
     """
-    rows: List[Dict] = []
+    rows: List[Dict[str, object]] = []
     for ds in datasets:
         for var in variants:
             metrics_path = TAB / f"{ds}_stack_{var}_metrics.csv"
@@ -159,21 +169,24 @@ def collect(datasets: List[str], variants: List[str]) -> pd.DataFrame:
                 continue
 
             out: Dict[str, object] = {"dataset": ds, "variant": var}
-            for c in _METRIC_COLS:
-                out[c] = pd.to_numeric(row.get(c, np.nan), errors="coerce")
+            for col in _METRIC_COLS:
+                out[col] = pd.to_numeric(row.get(col, np.nan), errors="coerce")
             rows.append(out)
 
     return pd.DataFrame(rows)
 
 
 def _order_categories(df: pd.DataFrame) -> pd.DataFrame:
-    if "dataset" in df.columns:
-        df["dataset"] = pd.Categorical(df["dataset"], categories=DATASETS, ordered=True)
-    if "variant" in df.columns:
-        df["variant"] = pd.Categorical(
-            df["variant"], categories=VARIANT_TAGS, ordered=True
+    out = df.copy()
+    if "dataset" in out.columns:
+        out["dataset"] = pd.Categorical(out["dataset"], categories=DATASETS, ordered=True)
+    if "variant" in out.columns:
+        out["variant"] = pd.Categorical(
+            out["variant"],
+            categories=VARIANT_TAGS,
+            ordered=True,
         )
-    return df.sort_values(["dataset", "variant"])
+    return out.sort_values(["dataset", "variant"])
 
 
 def _plot_bar(df: pd.DataFrame, metric: str, path: Path) -> None:
@@ -182,7 +195,7 @@ def _plot_bar(df: pd.DataFrame, metric: str, path: Path) -> None:
         _log(f"[INFO] cannot plot: metric '{metric}' missing or df empty.")
         return
 
-    present_variants = [v for v in VARIANT_TAGS if v in set(df["variant"].astype(str))]
+    present_variants = [v for v in VARIANT_TAGS if v in df["variant"].astype(str).unique()]
     if not present_variants:
         _log("[INFO] no variants present for plotting.")
         return
@@ -221,44 +234,43 @@ def compute_smote_effects(df: pd.DataFrame) -> pd.DataFrame:
     Output kolom:
     - dataset, variant, baseline_variant
     - <metric>_base, <metric>_variant, <metric>_delta
-      untuk setiap metric utama (accuracy, precision, recall, f1, roc_auc, pr_auc).
+      untuk setiap metric utama (_METRICS_MAIN).
     """
     if df.empty:
         return pd.DataFrame()
 
-    df = _order_categories(df.copy())
+    df_ord = _order_categories(df)
 
     # baseline per dataset (variant == nosmote)
-    base = df[df["variant"] == "nosmote"].set_index("dataset")
+    base = df_ord[df_ord["variant"] == "nosmote"].set_index("dataset")
     if base.empty:
         _log("[SMOTE] No baseline 'nosmote' rows found; cannot compute effects.")
         return pd.DataFrame()
 
     rows: List[Dict[str, object]] = []
-    for ds in df["dataset"].unique():
+    for ds in df_ord["dataset"].unique():
         if ds not in base.index:
             continue
         base_row = base.loc[ds]
 
         # semua varian selain nosmote
-        sub = df[(df["dataset"] == ds) & (df["variant"] != "nosmote")]
+        sub = df_ord[(df_ord["dataset"] == ds) & (df_ord["variant"] != "nosmote")]
         for _, r in sub.iterrows():
             out: Dict[str, object] = {
                 "dataset": ds,
                 "variant": r["variant"],
                 "baseline_variant": "nosmote",
             }
-            for m in _METRICS_MAIN:
-                b_val = float(base_row.get(m, np.nan))
-                v_val = float(r.get(m, np.nan))
-                delta = (
-                    v_val - b_val
-                    if np.isfinite(b_val) and np.isfinite(v_val)
-                    else np.nan
-                )
-                out[f"{m}_base"] = b_val
-                out[f"{m}_variant"] = v_val
-                out[f"{m}_delta"] = delta
+            for metric in _METRICS_MAIN:
+                base_val = float(base_row.get(metric, np.nan))
+                var_val = float(r.get(metric, np.nan))
+                if np.isfinite(base_val) and np.isfinite(var_val):
+                    delta = var_val - base_val
+                else:
+                    delta = np.nan
+                out[f"{metric}_base"] = base_val
+                out[f"{metric}_variant"] = var_val
+                out[f"{metric}_delta"] = delta
             rows.append(out)
 
     return pd.DataFrame(rows)
@@ -270,11 +282,8 @@ def _plot_smote_effects_f1(df_eff: pd.DataFrame, path: Path) -> None:
         _log("[SMOTE] No data to plot F1 effects.")
         return
 
-    # order kategori
     df_eff = df_eff.copy()
-    df_eff["dataset"] = pd.Categorical(
-        df_eff["dataset"], categories=DATASETS, ordered=True
-    )
+    df_eff["dataset"] = pd.Categorical(df_eff["dataset"], categories=DATASETS, ordered=True)
     df_eff["variant"] = pd.Categorical(
         df_eff["variant"],
         categories=[v for v in VARIANT_TAGS if v != "nosmote"],
@@ -330,7 +339,7 @@ def handle_smote_effects(df: pd.DataFrame) -> None:
 
 
 # ---------------- CLI ----------------
-def main():
+def main() -> None:
     ap = argparse.ArgumentParser(description="Aggregate & compare stacking results")
     ap.add_argument("--datasets", nargs="+", default=DATASETS, choices=DATASETS)
     ap.add_argument("--variants", nargs="+", default=VARIANT_TAGS, choices=VARIANT_TAGS)
@@ -338,7 +347,7 @@ def main():
         "--sort-metric",
         # Fokus tesis: accuracy & precision → default sort pakai accuracy
         default="accuracy",
-        choices=["accuracy", "precision", "recall", "f1", "roc_auc", "pr_auc"],
+        choices=_METRICS_MAIN,
     )
     ap.add_argument("--out-csv", default=str(TAB / "compare_runs.csv"))
     ap.add_argument("--out-md", default=str(TAB / "compare_runs.md"))
@@ -346,7 +355,7 @@ def main():
         "--plot-metric",
         # Default visualisasi juga pakai accuracy (bisa diubah via CLI)
         default="accuracy",
-        choices=["accuracy", "precision", "recall", "f1", "roc_auc", "pr_auc", "none"],
+        choices=_METRICS_MAIN + ["none"],
     )
     args = ap.parse_args()
 
