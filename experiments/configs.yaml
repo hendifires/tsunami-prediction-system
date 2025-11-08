@@ -14,7 +14,8 @@ global:
   # (bisa dimatikan jika ingin eksperimen tanpa neural network).
   with_mlp: true
 
-  feature_select: "none"   # none | pearson | rfe
+  # Pemilihan fitur: "none" | "pearson" | "rfe"
+  feature_select: "none"
   top_n: 30
 
   # Grid search untuk meta-learner (Logistic Regression)
@@ -24,10 +25,11 @@ global:
   fast: false
   fast_n: 5000
 
-  # Jika true, keluaran tiap run disalin ke folder khusus di experiments/runs/<name>/
+  # Disiapkan kalau nanti mau dipakai untuk salin output ke folder khusus
   collect_outputs: true
 
 # Opsional: jalankan tiap run dengan multi-seed (override global.random_state)
+# Bisa diubah misalnya menjadi [42, 1337]
 seeds: [42]
 
 runs:
@@ -40,6 +42,7 @@ runs:
   # Ablation penuh: nosmote + smote + smote_tomek + smote_enn
   - name: ablation_full
     datasets: ["tectonic", "volcanic"]
+    use_smote: "auto"
     ablation: true        # akan jalankan semua varian SMOTE
 
   # Contoh run spesifik volcanic (tanpa SMOTE)
@@ -53,3 +56,14 @@ runs:
     datasets: ["volcanic"]
     use_smote: "yes"
     ablation: false
+
+# Langkah-langkah pipeline yang dijalankan oleh run_experiment.py
+steps:
+  preproc: true  # jalankan preprocessing
+  fe: true       # jalankan feature_engineering
+  smote: true    # jalankan smote_pipeline
+  stack: true    # jalankan stacking_pipeline
+
+# Path tambahan (dipakai feature_engineering untuk jarak ke garis pantai)
+paths:
+  coastline: "data/coastline/ne_10m_coastline.shp"

@@ -1,44 +1,17 @@
-# experiments/run_experiment.py
 from __future__ import annotations
 # cSpell:ignore yaml ohe
 
 """
 Runner serbaguna untuk eksperimen (berbasis configs.yaml):
 
+- PREPROC (preprocessing)
+    -> cleaning & split awal sesuai modul preprocessing
 - FE (feature_engineering)
     -> tambah distance_to_coast_km (opsional) + OHE diagnostics
 - SMOTE (smote_pipeline)
     -> buat ulang split train/test + varian SMOTE
 - STACK (stacking_pipeline)
     -> train Stacking + simpan threshold & artefak
-
-Struktur konfigurasi (experiments/configs.yaml):
-
-global:
-  cv: 3
-  random_state: 42
-  with_xgb: false
-  with_mlp: true
-  feature_select: "none"
-  top_n: 30
-  meta_grid: true
-  fast: false
-  fast_n: 5000
-  collect_outputs: true
-
-seeds: [42]   # optional, override global.random_state per run
-
-runs:
-  - name: auto_best
-    datasets: ["tectonic", "volcanic"]
-    use_smote: "auto"
-    ablation: false
-
-  - name: ablation_full
-    datasets: ["tectonic", "volcanic"]
-    ablation: true
-
-dst.
 """
 
 import os
@@ -49,7 +22,7 @@ from typing import Dict, List, Any
 
 try:
     import yaml  # type: ignore
-except Exception as e:  # pragma: no cover - dependency error path
+except Exception as e:
     raise SystemExit(
         "PyYAML belum terpasang. Install dulu: pip install pyyaml"
     ) from e
@@ -85,6 +58,21 @@ def load_cfg(path: Path) -> Dict[str, Any]:
 
 
 # ---------- Command builders ----------
+def build_preproc_cmd(cfg: Dict[str, Any]) -> List[str]:
+    """
+    Bangun perintah untuk preprocessing.
+
+    Saat ini diasumsikan modul preprocessing bisa dijalankan
+    dengan default CLI: python -m tsunami_prediction.preprocessing
+    """
+    # Jika suatu saat butuh opsi tambahan, bisa diambil dari cfg["preproc"]
+    return [
+        sys.executable,
+        "-m",
+        "tsunami_prediction.preprocessing",
+    ]
+
+
 def build_fe_cmd(cfg: Dict[str, Any]) -> List[str]:
     """
     Bangun perintah untuk feature_engineering.
@@ -98,7 +86,7 @@ def build_fe_cmd(cfg: Dict[str, Any]) -> List[str]:
     paths:
       coastline: "data/coastline/ne_10m_coastline.shp"
     """
-    fe = cfg.get("fe", {})
+    fe = cfg.get("fe", {}) or {}
     coast = (cfg.get("paths", {}) or {}).get("coastline") or fe.get("coastline")
     cmd = [
         sys.executable,
@@ -122,7 +110,7 @@ def build_smote_cmd(cfg: Dict[str, Any]) -> List[str]:
     smote:
       overwrite: true
     """
-    sm = cfg.get("smote", {})
+    sm = cfg.get("smote", {}) or {}
     cmd = [
         sys.executable,
         "-m",
@@ -144,9 +132,9 @@ def build_stack_cmds(
     - nilai seed (override random_state)
     """
 
-    # helper: ambil nilai dari run_cfg, kalau tidak ada pakai global_cfg
     def g(key: str, default: Any) -> Any:
-        return run_cfg[key] if key in run_cfg else global_cfg.get(key, default)
+        """Ambil nilai dari run_cfg, lalu global_cfg, lalu default."""
+        return run_cfg.get(key, global_cfg.get(key, default))
 
     datasets = run_cfg.get("datasets", ["tectonic", "volcanic"])
 
@@ -154,7 +142,8 @@ def build_stack_cmds(
     top_n = int(g("top_n", 30))
     feature_select = str(g("feature_select", "none")).lower()
 
-    with_xgb = _str_bool(g("with_xgb", False))  # default: XGB dimatikan
+    # default: XGB dimatikan (hanya demi kompatibilitas argumen lama)
+    with_xgb = _str_bool(g("with_xgb", False))
     with_mlp = _str_bool(g("with_mlp", False))
 
     meta_grid = _str_bool(g("meta_grid", True))
@@ -209,7 +198,7 @@ def build_stack_cmds(
 def main() -> None:
     import argparse
 
-    parser = argparse.ArgumentParser(description="Runner eksperimen stacking + SMOTE")
+    parser = argparse.ArgumentParser(description="Runner eksperimen preprocessing + FE + SMOTE + stacking")
     parser.add_argument(
         "--config",
         type=str,
@@ -228,12 +217,14 @@ def main() -> None:
 
     # steps opsional (kalau tidak ada, semua dianggap True)
     steps = cfg.get("steps", {}) or {}
+    do_pre = _str_bool(steps.get("preproc", True))
     do_fe = _str_bool(steps.get("fe", True))
     do_sm = _str_bool(steps.get("smote", True))
     do_st = _str_bool(steps.get("stack", True))
 
     # seeds untuk random_state stacking
-    seeds = cfg.get("seeds") or [int(global_cfg.get("random_state", 42))]
+    seeds_cfg = cfg.get("seeds")
+    seeds = seeds_cfg or [int(global_cfg.get("random_state", 42))]
 
     # kalau tidak ada runs didefinisikan, buat satu run default
     if not runs_cfg:
@@ -247,6 +238,13 @@ def main() -> None:
         ]
 
     _log(f"[Runner] Mulai eksperimen (config={cfg_path}) …")
+
+    # 0) Preprocessing
+    if do_pre:
+        _log("[Runner] 0) Preprocessing")
+        run_cmd(build_preproc_cmd(cfg))
+    else:
+        _log("[Runner] 0) Preprocessing — dilewati")
 
     # 1) Feature Engineering
     if do_fe:
