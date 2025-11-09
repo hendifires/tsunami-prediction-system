@@ -23,6 +23,10 @@ TAB = REPORTS / "tables"
 
 ART = ROOT / "artifacts"  # encoder, scaler, daftar fitur
 
+# file CSV untuk daftar event ambigu yang mau di-drop manual
+# format: dataset,id  (dataset = "tectonic" atau "volcanic")
+MANUAL_EXCLUDE = DATA / "manual_exclude.csv"
+
 for p in (PROCESSED, TAB, ART):
     p.mkdir(parents=True, exist_ok=True)
 
@@ -168,9 +172,7 @@ def _map_tsu_binary(df: pd.DataFrame) -> pd.DataFrame:
     s = df[target_col]
     if s.dtype == "O":
         s2 = s.astype(str).str.lower().str.strip()
-        df["tsu"] = s2.isin(
-            {"1", "y", "yes", "true", "tsunami", "t"}
-        ).astype(int)
+        df["tsu"] = s2.isin({"1", "y", "yes", "true", "tsunami", "t"}).astype(int)
     else:
         df["tsu"] = pd.to_numeric(s, errors="coerce").fillna(0)
         df["tsu"] = (df["tsu"] > 0).astype(int)
@@ -197,6 +199,149 @@ def _drop_out_of_bounds(df: pd.DataFrame) -> pd.DataFrame:
     if "elevation" in df.columns:
         df.loc[df["elevation"] < -500, "elevation"] = np.nan
     return df
+
+
+# ---------- manual exclude (hapus tsunami ambigu secara manual) ----------
+def _load_manual_exclude(path: Path) -> Dict[str, List[float]]:
+    """
+    Baca daftar event yang mau di-drop manual.
+    Format expected (CSV):
+        dataset,id
+        tectonic,1234
+        tectonic,5678
+        volcanic,42
+    """
+    if not path.exists():
+        return {}
+
+    df = pd.read_csv(path)
+    if "dataset" not in df.columns or "id" not in df.columns:
+        print(
+            "[WARN] manual_exclude.csv ditemukan tapi tidak punya kolom 'dataset' & 'id'. Diabaikan."
+        )
+        return {}
+
+    df["dataset"] = df["dataset"].astype(str).str.strip().str.lower()
+    df["id"] = pd.to_numeric(df["id"], errors="coerce")
+
+    excl: Dict[str, List[float]] = {}
+    for ds, group in df.groupby("dataset"):
+        if ids := group["id"].dropna().unique().tolist():
+            excl[ds] = ids
+            print(f"[Preproc] manual exclude: dataset={ds}, num_ids={len(ids)}")
+    return excl
+
+
+
+def _apply_manual_exclude(
+    df: pd.DataFrame,
+    dataset: str,
+    exclude_map: Dict[str, List[float]],
+) -> pd.DataFrame:
+    """Drop baris dengan id tertentu sesuai manual_exclude.csv."""
+    ds_key = dataset.lower()
+    if ds_key not in exclude_map:
+        return df
+
+    if "id" not in df.columns:
+        print(f"[Preproc] manual exclude untuk {dataset} di-skip (kolom 'id' tidak ada).")
+        return df
+
+    ids = exclude_map[ds_key]
+    before = len(df)
+    out = df[~df["id"].isin(ids)].copy()
+    removed = before - len(out)
+    print(f"[Preproc] {dataset}: manual exclude {removed} baris (dari {before}).")
+    return out
+
+
+# ---------- Kanamori Level A filter ----------
+def _apply_kanamori_levelA(
+    df: pd.DataFrame,
+    min_mag: float = 7.0,
+    max_depth: float = 70.0,
+) -> pd.DataFrame:
+    """
+    Terapkan kriteria Kanamori untuk gempa tektonik (Level A):
+        magnitude >= min_mag
+        depth <= max_depth (km)
+
+    Filter diterapkan ke SELURUH dataset tektonik (baik tsu=0 maupun tsu=1),
+    sehingga model fokus pada gempa besar dan dangkal.
+    """
+    if "mag" not in df.columns or "depth" not in df.columns:
+        print("[Preproc] Kanamori Level A tidak diterapkan (mag/depth tidak ada).")
+        return df
+
+    before = len(df)
+    mask = (df["mag"] >= min_mag) & (df["depth"] <= max_depth)
+    out = df.loc[mask].reset_index(drop=True)
+    after = len(out)
+
+
+    if after == 0:
+        print(
+            "[Preproc] WARNING: Kanamori filter menghasilkan 0 baris. "
+            "Cek kembali nilai min_mag / max_depth."
+        )
+        return df
+
+    # ringkasan distribusi tsu
+    if "tsu" in out.columns:
+        dist = out["tsu"].value_counts(dropna=False).to_dict()
+    else:
+        dist = {}
+    print(
+        f"[Preproc] Kanamori Level A: {before} -> {after} baris "
+        f"(mag>={min_mag}, depth<={max_depth}). Distribusi tsu: {dist}"
+    )
+    return out
+
+
+# ---------- otomatis: deteksi & buang tsunami ambigu ----------
+def _drop_tectonic_ambiguous_tsu(
+    df: pd.DataFrame,
+    min_mag: float = 7.0,
+    max_depth: float = 70.0,
+) -> pd.DataFrame:
+    """
+    Identifikasi & buang event tsunami TEKTONIK yang ambigu:
+      - tsu == 1
+      - DAN (mag < min_mag ATAU depth > max_depth)
+    Event-event ini akan disimpan ke CSV terpisah:
+      reports/tables/tectonic_ambiguous_tsu.csv
+    """
+    if not {"tsu", "mag", "depth"}.issubset(df.columns):
+        print("[Preproc] Ambiguous-tsu: kolom tsu/mag/depth tidak lengkap, skip.")
+        return df
+
+    df = df.copy()
+
+    # hanya event dengan mag & depth terisi yang kita nilai
+    cond_valid = df["mag"].notna() & df["depth"].notna()
+    cond_tsu = df["tsu"] == 1
+    cond_amb = cond_valid & cond_tsu & (
+        (df["mag"] < min_mag) | (df["depth"] > max_depth)
+    )
+
+    ambiguous = df.loc[cond_amb].copy()
+    if ambiguous.empty:
+        print("[Preproc] Ambiguous-tsu: tidak ada event yang melanggar kriteria Kanamori.")
+        return df
+
+    # simpan ke CSV untuk dokumentasi di tesis
+    out_path = TAB / "tectonic_ambiguous_tsu.csv"
+    ambiguous.to_csv(out_path, index=False)
+
+    before = len(df)
+    df_clean = df.loc[~cond_amb].copy()
+    removed = before - len(df_clean)
+
+    print(
+        f"[Preproc] Ambiguous-tsu: {removed} baris (tsu=1 & mag<{min_mag} "
+        f"atau depth>{max_depth}) dipindahkan ke {out_path.name}."
+    )
+    return df_clean
 
 
 # ---------- dedup utility ----------
@@ -320,6 +465,7 @@ def prepare_tectonic(df: pd.DataFrame) -> pd.DataFrame:
     - longitude   : float64
     - depth       : float64
     - mag         : float64
+    - mmi_int     : float64  (NEW)
     - tsu         : int64
     """
     # mapping khusus dari spesifikasi kolom raw
@@ -353,6 +499,7 @@ def prepare_tectonic(df: pd.DataFrame) -> pd.DataFrame:
             "mb",
             "ml",
             "region",
+            "mmi_int",  # NEW
         ],
     )
 
@@ -378,6 +525,7 @@ def prepare_tectonic(df: pd.DataFrame) -> pd.DataFrame:
         "longitude",
         "depth",
         "mag",
+        "mmi_int",  # NEW
         "tsu",
     ]
     existing = [c for c in wanted if c in df.columns]
@@ -406,6 +554,7 @@ def prepare_tectonic(df: pd.DataFrame) -> pd.DataFrame:
         "longitude",
         "depth",
         "mag",
+        "mmi_int",  # NEW
         "region",
     ]
     for c in num_cols_float:
@@ -544,9 +693,7 @@ def encode_and_scale(
     NOTE: Untuk training final, scaler/encoder akan berada di dalam CV Pipeline.
     """
     if "tsu" not in df.columns:
-        raise KeyError(
-            f"[{dataset}] kolom target 'tsu' tidak ditemukan setelah cleaning."
-        )
+        raise KeyError(f"[{dataset}] kolom target 'tsu' tidak ditemukan setelah cleaning.")
 
     # pastikan tsu int64
     y = df["tsu"].astype("int64")
@@ -557,6 +704,7 @@ def encode_and_scale(
             for c in (
                 "mag",
                 "depth",
+                "mmi_int",   # NEW: gunakan MMI sebagai fitur
                 "latitude",
                 "longitude",
                 "year",
@@ -565,11 +713,7 @@ def encode_and_scale(
             )
             if c in df.columns
         ]
-        cat_cols = [
-            c
-            for c in ("country", "region", "area", "location")
-            if c in df.columns
-        ]
+        cat_cols = [c for c in ("country", "region", "area", "location") if c in df.columns]
     else:
         num_cols = [
             c
@@ -585,11 +729,7 @@ def encode_and_scale(
             )
             if c in df.columns
         ]
-        cat_cols = [
-            c
-            for c in ("country", "type", "status", "location", "name")
-            if c in df.columns
-        ]
+        cat_cols = [c for c in ("country", "type", "status", "location", "name") if c in df.columns]
 
     X = df[num_cols + cat_cols].copy()
 
@@ -667,7 +807,13 @@ def _maybe_write_csv(
 
 
 # ================== MAIN ==================
-def main(overwrite: bool = False, normalize: bool = True) -> None:
+def main(
+    overwrite: bool = False,
+    normalize: bool = True,
+    kanamori_levelA: bool = False,
+    min_mag: float = 7.0,
+    max_depth: float = 70.0,
+) -> None:
     # cari file mentah (nama baru & fallback)
     raw_tec = next(
         (
@@ -708,11 +854,36 @@ def main(overwrite: bool = False, normalize: bool = True) -> None:
     df_t_clean0 = prepare_tectonic(df_t_raw)
     df_v_clean0 = prepare_volcanic(df_v_raw)
 
+    # manual exclude (tsunami ambigu versi manual) jika ada file
+    excl_map = _load_manual_exclude(MANUAL_EXCLUDE)
+    if excl_map:
+        df_t_clean0 = _apply_manual_exclude(df_t_clean0, "tectonic", excl_map)
+        df_v_clean0 = _apply_manual_exclude(df_v_clean0, "volcanic", excl_map)
+
+    # Otomatis: pindahkan tsunami ambigu (tsu=1 tapi mag<min_mag atau depth>max_depth)
+    # ke CSV terpisah, lalu hapus dari dataset training
+    df_t_clean0 = _drop_tectonic_ambiguous_tsu(
+        df_t_clean0,
+        min_mag=min_mag,
+        max_depth=max_depth,
+    )
+
+    # Kanamori Level A (hanya tectonic) jika diminta
+    if kanamori_levelA:
+        df_t_clean0 = _apply_kanamori_levelA(
+            df_t_clean0,
+            min_mag=min_mag,
+            max_depth=max_depth,
+        )
+
+    # jika ada filtering ekstra (Kanamori / manual exclude / ambiguous) kita paksa overwrite
+    effective_overwrite = overwrite or kanamori_levelA or bool(excl_map)
+
     # simpan/reuse clean
     df_t_clean, df_v_clean = _save_or_reuse_clean(
         df_t_clean0,
         df_v_clean0,
-        overwrite=overwrite,
+        overwrite=effective_overwrite,
     )
 
     # QC tables untuk CLEAN (selalu update agar sesuai isi terkini)
@@ -737,8 +908,8 @@ def main(overwrite: bool = False, normalize: bool = True) -> None:
 
     out_t_prep = PROCESSED / "tectonic_preprocessed.csv"
     out_v_prep = PROCESSED / "volcanic_preprocessed.csv"
-    _maybe_write_csv(df_t_prep, out_t_prep, overwrite, "preprocessed tectonic")
-    _maybe_write_csv(df_v_prep, out_v_prep, overwrite, "preprocessed volcanic")
+    _maybe_write_csv(df_t_prep, out_t_prep, effective_overwrite, "preprocessed tectonic")
+    _maybe_write_csv(df_v_prep, out_v_prep, effective_overwrite, "preprocessed volcanic")
 
     _save_shape_summary(
         [
@@ -777,5 +948,31 @@ if __name__ == "__main__":
         action="store_true",
         help="skip normalization & encoding, save only clean CSVs",
     )
+    ap.add_argument(
+        "--kanamori-levelA",
+        action="store_true",
+        help=(
+            "Filter dataset tektonik sesuai kriteria Kanamori "
+            "(magnitude>=min-mag, depth<=max-depth)."
+        ),
+    )
+    ap.add_argument(
+        "--min-mag",
+        type=float,
+        default=7.0,
+        help="Batas bawah magnitudo untuk Kanamori Level A (default=7.0).",
+    )
+    ap.add_argument(
+        "--max-depth",
+        type=float,
+        default=70.0,
+        help="Batas atas kedalaman (km) untuk Kanamori Level A (default=70).",
+    )
     args = ap.parse_args()
-    main(overwrite=args.overwrite, normalize=not args.no_normalize)
+    main(
+        overwrite=args.overwrite,
+        normalize=not args.no_normalize,
+        kanamori_levelA=args.kanamori_levelA,
+        min_mag=args.min_mag,
+        max_depth=args.max_depth,
+    )
