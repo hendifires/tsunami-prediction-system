@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import argparse
 from pathlib import Path
-from typing import Dict, List
+from typing import Dict
 
 import numpy as np
 import pandas as pd
@@ -53,17 +53,17 @@ def _train_baseline(
     """
     Latih Logistic Regression sebagai baseline.
     Asumsi:
-      - semua kolom kecuali 'tsu' = fitur numerik siap pakai (sudah di-encode & scale)
+      - semua kolom kecuali 'tsu' = fitur numerik hasil preprocessing (sudah di-encode & scale)
       - 'tsu' = target biner 0/1
     """
-
     if "tsu" not in df.columns:
         raise KeyError(f"[{domain}] kolom 'tsu' tidak ditemukan di dataset preprocessed.")
 
-    # buang baris yang masih punya NaN di fitur/target
-    df = df.dropna().reset_index(drop=True)
+    # bersihkan inf -> NaN lalu isi semua NaN dengan 0
+    # (0 di ruang fitur ter-scale ≈ nilai rata-rata)
+    df = df.replace([np.inf, -np.inf], np.nan)
 
-    X = df.drop(columns=["tsu"])
+    X = df.drop(columns=["tsu"]).fillna(0.0)
     y = df["tsu"].astype(int)
 
     X_train, X_test, y_train, y_test = train_test_split(
@@ -74,7 +74,6 @@ def _train_baseline(
         stratify=y,
     )
 
-    # Logistic Regression dengan class_weight='balanced' supaya aware class imbalance
     clf = LogisticRegression(
         max_iter=500,
         class_weight="balanced",
@@ -85,7 +84,6 @@ def _train_baseline(
 
     y_pred = clf.predict(X_test)
 
-    # handle kasus probabilitas/ROC yang bisa error kalau hanya satu kelas di y_test
     try:
         y_proba = clf.predict_proba(X_test)[:, 1]
         roc_auc = roc_auc_score(y_test, y_proba)
@@ -109,11 +107,7 @@ def _train_baseline(
     print(f"Class balance (overall) tsu=1: {y.mean():.3f}")
     print("\nClassification report (test set):")
     print(classification_report(y_test, y_pred, digits=3, zero_division=0))
-
-    if np.isnan(roc_auc):
-        print("ROC AUC: NaN")
-    else:
-        print(f"ROC AUC: {roc_auc:.3f}")
+    print("ROC AUC: NaN" if np.isnan(roc_auc) else f"ROC AUC: {roc_auc:.3f}")
 
     return metrics
 
