@@ -1,5 +1,5 @@
 from __future__ import annotations
-# cSpell:ignore writeable subduction Vanuatu Tonga Nicaragua Rica seaborn geopandas shapely Opsional opsional
+# cSpell:ignore writeable subduction Vanuatu Tonga Nicaragua Rica seaborn geopandas shapely Opsional opsional untuk
 
 """
 Feature Engineering untuk domain tektonik & vulkanik.
@@ -7,7 +7,7 @@ Feature Engineering untuk domain tektonik & vulkanik.
 Fokus:
 - Menambahkan fitur domain-aware yang relevan untuk prediksi tsunami:
   * Tektonik:
-      - magnitudo & depth (termasuk transformasi log / kuadrat / rasio)
+      - magnitudo, depth, MMI (mmi_int) + transformasi (log / kuadrat / rasio)
       - lokasi (lat/lon, abs_lat, tropis atau tidak)
       - zona subduksi (is_subduction_zone)
       - jarak ke garis pantai (distance_to_coast_km + turunannya, bila tersedia)
@@ -70,6 +70,8 @@ ART = ROOT / "artifacts"
 for p in (PROCESSED, TAB, FIG, ART):
     p.mkdir(parents=True, exist_ok=True)
 
+# default shapefile coastline (opsional)
+DEFAULT_COAST = DATA / "coastline" / "ne_10m_coastline.shp"
 
 # ====================================================
 # UTILITIES
@@ -113,6 +115,9 @@ def _clip_physical_ranges(df: pd.DataFrame) -> pd.DataFrame:
         out["mag"] = _num(out["mag"]).clip(lower=0, upper=10)
     if "depth" in out.columns:
         out["depth"] = _num(out["depth"]).clip(lower=0)
+    if "mmi_int" in out.columns:
+        # Modified Mercalli Intensity biasanya 0–12
+        out["mmi_int"] = _num(out["mmi_int"]).clip(lower=0, upper=12)
     if "vei" in out.columns:
         out["vei"] = _num(out["vei"]).clip(lower=0, upper=8)
     if "elevation" in out.columns:
@@ -186,7 +191,7 @@ def add_subduction_flag(df: pd.DataFrame) -> pd.DataFrame:
     return out
 
 
-# ---- helper terpisah (menghapus warning “extract method”) ----
+# ---- helper terpisah untuk distance-to-coast ----
 def _distance_to_coast_with_gpd(df: pd.DataFrame, coast_path: str) -> pd.DataFrame:
     """Hitung jarak ke garis pantai dengan GeoPandas/Shapely (EPSG:4326->3857)."""
     import geopandas as gpd  # type: ignore
@@ -313,15 +318,6 @@ def engineer_tectonic(
 ) -> Tuple[pd.DataFrame, List[str], List[str]]:
     """
     Feature engineering khusus domain tektonik.
-
-    Fitur utama:
-    - mag, depth, latitude, longitude, year/month/day (core fisik + waktu).
-    - depth_log1p, mag_sq, mag_over_depth1p.
-    - abs_lat, is_tropic, lat_lon_prod.
-    - is_subduction_zone, country_norm.
-    - days_since_prev (gap waktu antar event).
-    - (opsional) month_sin/cos, day_sin/cos.
-    - distance_to_coast_km + turunannya akan ditambahkan di run_one().
     """
     out = engineer_common(df, use_temporal=use_temporal)
     out = add_subduction_flag(out)
@@ -334,12 +330,12 @@ def engineer_tectonic(
     if {"mag", "depth"}.issubset(out.columns):
         out["mag_over_depth1p"] = _num(out["mag"]) / (_num(out["depth"]).abs() + 1.0)
 
-    # distance_to_coast_km dan turunannya akan ditambahkan di run_one
     num_cols = [
         c
         for c in [
             "mag",
             "depth",
+            "mmi_int",
             "latitude",
             "longitude",
             "year",
@@ -364,11 +360,13 @@ def engineer_tectonic(
         ]
         if c in out.columns
     ]
+
     cat_cols = [
         c
         for c in ["country_norm", "country", "region", "area", "location"]
         if c in out.columns
     ]
+
     cols = [c for c in out.columns if c != "tsu"] + (
         ["tsu"] if "tsu" in out.columns else []
     )
@@ -381,15 +379,6 @@ def engineer_volcanic(
 ) -> Tuple[pd.DataFrame, List[str], List[str]]:
     """
     Feature engineering khusus domain vulkanik.
-
-    Fitur utama:
-    - vei, elevation, eq, latitude, longitude, year/month/day.
-    - elev_log1p, vei_sq, eq_log1p.
-    - vei_x_elev, vei_over_eq1p.
-    - abs_lat, is_tropic, lat_lon_prod.
-    - is_subduction_zone, country_norm, type, status, agent.
-    - days_since_prev, encoding siklik (opsional).
-    - distance_to_coast_km + turunannya akan ditambahkan di run_one().
     """
     out = engineer_common(df, use_temporal=use_temporal)
     out = add_subduction_flag(out)
@@ -438,11 +427,13 @@ def engineer_volcanic(
         ]
         if c in out.columns
     ]
+
     cat_cols = [
         c
         for c in ["country_norm", "country", "type", "status", "location", "name", "agent"]
         if c in out.columns
     ]
+
     cols = [c for c in out.columns if c != "tsu"] + (
         ["tsu"] if "tsu" in out.columns else []
     )
@@ -457,9 +448,7 @@ def do_ohe(
     cat_cols: List[str],
 ) -> Tuple[pd.DataFrame, OneHotEncoder, List[str]]:
     """
-    One-Hot Encoding untuk kolom kategorikal, dengan:
-    - handle_unknown="ignore" agar aman saat inference.
-    - Mengembalikan DataFrame penuh (numerik + OHE + kolom lainnya).
+    One-Hot Encoding untuk kolom kategorikal.
     """
     enc = _one_hot_encoder()
     if not cat_cols:
@@ -476,8 +465,7 @@ def do_ohe(
 
 def plot_feature_count(before: int, after: int, title: str, out_png: Path) -> None:
     """
-    Visualisasi sederhana:
-    - Jumlah fitur sebelum dan sesudah OHE (mendukung penjelasan kompleksitas model).
+    Visualisasi sederhana: jumlah fitur sebelum & sesudah OHE.
     """
     plt.figure(figsize=(4.8, 4))
     xs = np.arange(2)
@@ -507,13 +495,7 @@ def pearson_topn(
 ):
     """
     Top-k fitur berdasarkan |korelasi Pearson| dengan target tsu.
-
-    Tujuan:
-    - Memberi gambaran fitur mana (termasuk hasil rekayasa) yang paling informatif
-      secara linear terhadap tsunami.
-    - Dapat kamu lampirkan sebagai tabel & bar plot di bab EDA/FE.
     """
-    # kecualikan kolom id dari perhitungan korelasi
     num_cols = [
         c
         for c in df.select_dtypes(include="number").columns
@@ -542,6 +524,22 @@ def pearson_topn(
     return corr
 
 
+def _plot_rfe_features(selected: List[str], title: str, out_png: Path) -> None:
+    """
+    Helper plotting untuk hasil RFE.
+    """
+    if not selected:
+        return
+    plt.figure(figsize=(7, 4))
+    y_pos = np.arange(len(selected))
+    plt.barh(y_pos, list(range(len(selected), 0, -1)))
+    plt.yticks(y_pos, selected)
+    plt.gca().invert_yaxis()
+    plt.title(f"{title}: Top {len(selected)} Features (RFE)")
+    plt.xlabel("Relative Rank (1 = best)")
+    _savefig(out_png)
+
+
 def rfe_select(
     df: pd.DataFrame,
     target: str,
@@ -554,20 +552,11 @@ def rfe_select(
 ) -> List[str]:
     """
     RFE (Recursive Feature Elimination) versi ringan dengan RandomForest.
-
-    Tujuan:
-    - Memilih subset fitur paling penting secara non-linear terhadap target.
-    - Hasilnya bisa dipakai sebagai referensi pemilihan fitur utama tesis.
-
-    Output:
-    - CSV daftar fitur terpilih (rank).
-    - Opsional: bar plot fitur terpilih (kalau out_png diberikan).
     """
     if target not in df.columns:
         print(f"[RFE] {title}: target '{target}' tidak ada, skip.")
         return []
 
-    # buang target dan kolom id (id tidak dipakai sebagai fitur model)
     drop_cols = [target] + (["id"] if "id" in df.columns else [])
     X = df.drop(columns=drop_cols)
     y = df[target].astype(int)
@@ -598,16 +587,8 @@ def rfe_select(
         df_out.to_csv(out_csv, index=False)
         print(f"[RFE] {title}: top {len(selected)} features -> {selected[:5]}...")
 
-        # Plot bar simple untuk fitur hasil RFE (mempertegas visual FE)
-        if out_png is not None and selected:
-            plt.figure(figsize=(7, 4))
-            y_pos = np.arange(len(selected))
-            plt.barh(y_pos, list(range(len(selected), 0, -1)))
-            plt.yticks(y_pos, selected)
-            plt.gca().invert_yaxis()
-            plt.title(f"{title}: Top {len(selected)} Features (RFE)")
-            plt.xlabel("Relative Rank (1 = best)")
-            _savefig(out_png)
+        if out_png is not None:
+            _plot_rfe_features(selected, title, out_png)
 
         return selected
     except Exception as exc:  # pragma: no cover (defensif)
@@ -628,18 +609,7 @@ def run_one(
     use_temporal: bool = False,
 ) -> None:
     """
-    Jalankan seluruh pipeline FE untuk satu domain (tectonic / volcanic):
-
-    Langkah:
-    1) Baca CSV clean (tectonic.csv / volcanic.csv).
-    2) Engineer fitur domain (engineer_tectonic / engineer_volcanic).
-    3) Tambah distance_to_coast_km + turunannya (jika shapefile tersedia).
-    4) Simpan <dataset>_fe.csv + num_cols & cat_cols ke artifacts.
-    5) Jalankan OHE + diagnosa:
-         - before vs after feature count
-         - top-k Pearson corr dengan tsu
-         - top-k RFE features
-    6) Opsional: materialize DataFrame OHE + encoder ke artifacts.
+    Jalankan pipeline FE untuk satu domain (tectonic / volcanic).
     """
     src = PROCESSED / f"{dataset}.csv"
     if not src.exists():
@@ -649,7 +619,7 @@ def run_one(
     dst_fe_ohe = PROCESSED / f"{dataset}_fe_ohe.csv"
 
     if dst_fe.exists() and not overwrite:
-        print(f("[INFO] Reusing existing FE: {dst_fe.name}"))
+        print(f"[INFO] Reusing existing FE: {dst_fe.name}")
     else:
         df = _read_csv(src)
         if dataset == "tectonic":
@@ -702,7 +672,6 @@ def run_one(
     ohe_df, enc, ohe_cols = do_ohe(fe_df, cat_for_ohe)
     after = ohe_df.shape[1]
 
-    # Visual jumlah fitur
     plot_feature_count(
         before,
         after,
@@ -710,7 +679,6 @@ def run_one(
         FIG / f"{dataset}_ohe_count.png",
     )
 
-    # Pearson top-k vs tsu
     pearson_topn(
         ohe_df,
         target,
@@ -720,7 +688,6 @@ def run_one(
         TAB / f"{dataset}_pearson.csv",
     )
 
-    # RFE top-k features + plot
     rfe_select(
         ohe_df,
         target,
@@ -730,7 +697,6 @@ def run_one(
         out_png=FIG / f"{dataset}_rfe_top{rfe_topn}.png",
     )
 
-    # Opsional: simpan dataset OHE & encoder
     if materialize_ohe:
         ohe_df.to_csv(dst_fe_ohe, index=False)
         dump(enc, ART / f"{dataset}_ohe_encoder.joblib")
@@ -739,6 +705,7 @@ def run_one(
 
 
 def main(
+    datasets: Optional[List[str]] = None,
     overwrite: bool = False,
     materialize_ohe: bool = False,
     coast_path: Optional[str] = None,
@@ -746,25 +713,27 @@ def main(
     rfe_topn: int = 10,
     corr_topn: int = 10,
 ) -> None:
+    """
+    Wrapper main: bisa dipanggil dari kode Python atau CLI.
+
+    datasets:
+      - None  -> proses ["tectonic", "volcanic"]
+      - list  -> contoh ["tectonic"], ["volcanic"], atau keduanya.
+    """
+    if datasets is None:
+        datasets = ["tectonic", "volcanic"]
+
     print("[FE] Start feature engineering...")
-    run_one(
-        "tectonic",
-        overwrite,
-        materialize_ohe,
-        coast_path,
-        rfe_topn=rfe_topn,
-        corr_topn=corr_topn,
-        use_temporal=use_temporal,
-    )
-    run_one(
-        "volcanic",
-        overwrite,
-        materialize_ohe,
-        coast_path,
-        rfe_topn=rfe_topn,
-        corr_topn=corr_topn,
-        use_temporal=use_temporal,
-    )
+    for ds in datasets:
+        run_one(
+            ds,
+            overwrite,
+            materialize_ohe,
+            coast_path,
+            rfe_topn=rfe_topn,
+            corr_topn=corr_topn,
+            use_temporal=use_temporal,
+        )
     print(
         f"[DONE] Feature engineering selesai.\n"
         f" - FIG: {FIG}\n - TAB: {TAB}\n - ART: {ART}"
@@ -775,9 +744,21 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(
         description="Feature engineering with OHE diagnostics."
     )
+    parser.add_argument(
+        "--datasets",
+        nargs="+",
+        choices=["tectonic", "volcanic"],
+        default=["tectonic", "volcanic"],
+        help="dataset yang akan diproses (default: tectonic volcanic)",
+    )
     parser.add_argument("--overwrite", action="store_true")
     parser.add_argument("--materialize-ohe", action="store_true")
-    parser.add_argument("--coast", type=str, default=None)
+    parser.add_argument(
+        "--coast",
+        type=str,
+        default=str(DEFAULT_COAST) if DEFAULT_COAST.exists() else None,
+        help="path ke shapefile coastline (.shp); default ke data/coastline/ne_10m_coastline.shp bila ada",
+    )
     parser.add_argument("--rfe-topn", type=int, default=10)
     parser.add_argument("--corr-topn", type=int, default=10)
     parser.add_argument(
@@ -787,6 +768,7 @@ if __name__ == "__main__":
     )
     args = parser.parse_args()
     main(
+        datasets=args.datasets,
         overwrite=args.overwrite,
         materialize_ohe=args.materialize_ohe,
         coast_path=args.coast,

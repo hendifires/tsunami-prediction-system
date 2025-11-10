@@ -1,41 +1,49 @@
 from __future__ import annotations
-# cSpell:ignore nosmote smoteenn tomek passthrough liblinear lbfgs oof proba preds joblib writeable sklearn hyperparams
+# cSpell:ignore nosmote smoteenn tomek passthrough liblinear lbfgs oof proba preds joblib writeable sklearn hyperparams xgboost histgradient
 
 """
-Stacking Ensemble Pipeline + SMOTE Ablation (fast & robust)
+Stacking Ensemble Pipeline + SMOTE Ablation (CV tunggal, k=5)
 
-- Compare: non-SMOTE vs SMOTE variants (smote, smote_tomek, smoteenn) per dataset.
-- Metrics: Accuracy, Precision, Recall, F1, ROC-AUC, PR-AUC, Brier, FN.
-- Outputs per run: metrics.csv, preds.csv, CM/ROC/PR figures, model.joblib
-- Aggregated ablation: reports/tables/ablation_smote.csv
+- Bandingkan untuk tiap dataset (tectonic, volcanic):
+    * non-SMOTE      (nosmote)
+    * SMOTE          (smote)
+    * SMOTE+Tomek    (smote_tomek)
+    * SMOTEENN       (smote_enn)
 
-Tambahan:
-- Waktu: fit_sec (per model + stacking), grid_sec (meta-grid, default dimatikan),
-  run_sec (durasi total).
-- Simpan confusion matrix sebagai gambar (reports/figures) dan CSV (reports/tables).
-- Cari decision_threshold optimal (F-beta) via OOF CV; disimpan ke artifact
-  (dipakai serve_api).
-- Kebijakan threshold:
-  * Volcanic: precision-leaning (beta=0.75, min_precision=0.88).
-  * Tectonic: balanced (beta=1.0, tanpa syarat min_precision).
+- Untuk setiap varian sampling di atas:
+    * Jalankan stacking dengan k-fold CV, k = 5 (default).
+    * Base learners dievaluasi dulu dengan CV (F1-macro); hanya yang dekat
+      skor terbaik (dalam toleransi 1%) yang dipakai sebagai input stacking.
 
-Tambahan untuk dokumentasi tesis:
-- reports/figures/stacking_architecture.png
-    Diagram arsitektur stacking (base learners → meta-learner).
-- reports/tables/model_hyperparams.csv
-    Ringkasan model & hyperparameter utama untuk semua base & meta learner.
-- reports/tables/runtime_summary.csv
-    Ringkasan waktu eksekusi per dataset/varian/model.
+- Base learners (kandidat utama):
+    * rf   : RandomForestClassifier
+    * gb   : HistGradientBoostingClassifier
+    * xgb  : XGBClassifier (opsional; jika xgboost terpasang)
+    * lr   : LogisticRegression (dibungkus StandardScaler)
+    * sgd  : SGDClassifier (log-loss, linear, + StandardScaler)
+    * mlp  : MLPClassifier (opsional, hanya jika --with-mlp)
 
-Catatan penting tesis (versi ini):
-- Base learners hanya model klasik:
-    * Decision Tree (dt)
-    * Random Forest (rf)
-    * Neural Network / MLP (mlp)
-    * SVM (svm)
-    * Naive Bayes (nb)
-    * KNN (knn)
-- Logistic Regression hanya dipakai sebagai meta-learner, bukan base model.
+- Meta-learner:
+    * Logistic Regression (stacking_lr_meta) saja.
+
+- Metrics:
+    * Accuracy, Precision, Recall, F1 (binary), F1-macro, ROC-AUC,
+      PR-AUC (average precision), Brier, FN.
+    * Per run (dataset + variant): metrics.csv, preds.csv, CM/ROC/PR figures,
+      model.joblib.
+
+- Threshold tuning:
+    * Cari threshold optimal dengan F-beta menggunakan probabilitas OOF (CV).
+    * Volcanic: precision-leaning (beta=0.75, min_precision≈0.88).
+    * Tectonic: balanced (beta=1.0, tanpa min_precision).
+
+- Ringkasan global:
+    * reports/tables/ablation_smote.csv
+        -> dataset, variant, metrics stacking, threshold, runtime.
+    * reports/tables/runtime_summary.csv
+        -> waktu fit per model + stacking.
+    * reports/tables/model_hyperparams.csv
+        -> daftar model & hyperparams (base yang dipakai + meta).
 """
 
 import argparse
@@ -51,7 +59,6 @@ import matplotlib
 
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
-from matplotlib.patches import FancyBboxPatch, FancyArrowPatch
 
 import numpy as np
 import pandas as pd
@@ -60,17 +67,17 @@ from joblib import dump
 from sklearn.base import clone
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import StandardScaler, FunctionTransformer
-from sklearn.linear_model import LogisticRegression
-from sklearn.neighbors import KNeighborsClassifier
-from sklearn.naive_bayes import GaussianNB
-from sklearn.tree import DecisionTreeClassifier
+from sklearn.linear_model import LogisticRegression, SGDClassifier
 from sklearn.feature_selection import RFE
 from sklearn.ensemble import (
     RandomForestClassifier,
     StackingClassifier,
+    HistGradientBoostingClassifier,
 )
-from sklearn.svm import SVC
-from sklearn.model_selection import GridSearchCV, cross_val_predict
+from sklearn.model_selection import GridSearchCV, cross_val_predict, cross_val_score
+from sklearn.naive_bayes import GaussianNB
+from sklearn.neighbors import KNeighborsClassifier  # hanya dipakai di MLP fallback, bisa dihapus jika tidak perlu
+from sklearn.tree import DecisionTreeClassifier      # hanya dipakai di RFE
 from sklearn.metrics import (
     accuracy_score,
     precision_score,
@@ -155,6 +162,7 @@ def _metrics(
         "precision": precision_score(y_true, y_pred, zero_division=0),
         "recall": recall_score(y_true, y_pred, zero_division=0),
         "f1": f1_score(y_true, y_pred, zero_division=0),
+        "f1_macro": f1_score(y_true, y_pred, average="macro", zero_division=0),
     }
 
     if y_prob is not None:
@@ -178,8 +186,8 @@ def _metrics(
             }
         )
 
-    tn, fp, fn, tp = confusion_matrix(y_true, y_pred, labels=[0, 1]).ravel()
-    out.update({"tn": float(tn), "fp": float(fp), "fn": float(fn), "tp": float(tp)})
+    tn, fp, fn_, tp = confusion_matrix(y_true, y_pred, labels=[0, 1]).ravel()
+    out.update({"tn": float(tn), "fp": float(fp), "fn": float(fn_), "tp": float(tp)})
     return out
 
 
@@ -270,7 +278,7 @@ def load_split(
     common = [c for c in df_tr.columns if c in df_te.columns]
     X_train, X_test = df_tr[common], df_te[common]
 
-    mode = _variant_to_tag(smote_variant) if use_smote else "no-smote"
+    mode = _variant_to_tag(smote_variant) if use_smote else "nosmote"
     _log(f"[Stack] {dataset} ({mode}): X_train={X_train.shape}, X_test={X_test.shape}")
     return X_train, X_test, y_train, y_test
 
@@ -397,45 +405,50 @@ def build_base_learners(
     with_mlp: bool,
 ) -> List[Tuple[str, object]]:
     """
-    Kemas semua base learners dalam bentuk (name, estimator).
+    Base learners kuat:
 
-    Versi tesis ini hanya memakai base learner klasik:
-    - dt  : DecisionTreeClassifier
-    - rf  : RandomForestClassifier
-    - mlp : MLPClassifier (opsional, diaktifkan lewat --with-mlp)
-    - svm : SVC (kernel RBF, probability=False → lebih cepat,
-                 dipakai via decision_function di stacking)
-    - nb  : GaussianNB
-    - knn : KNeighborsClassifier
-
-    Logistic Regression hanya dipakai sebagai meta-learner di Stacking.
+    - rf   : RandomForestClassifier
+    - gb   : HistGradientBoostingClassifier
+    - xgb  : XGBClassifier (opsional; di-skip jika tidak terinstal)
+    - lr   : LogisticRegression (pipeline dengan StandardScaler)
+    - sgd  : SGDClassifier (log-loss, linear)
+    - mlp  : MLPClassifier (opsional, via --with-mlp)
     """
     to_np_tf = FunctionTransformer(to_np_writable, validate=False)
 
     learners: List[Tuple[str, object]] = [
         (
-            "knn",
+            "lr",
             Pipeline(
                 [
                     ("scaler", StandardScaler()),
-                    ("clf", KNeighborsClassifier(n_neighbors=11)),
+                    (
+                        "clf",
+                        LogisticRegression(
+                            max_iter=4000,
+                            class_weight="balanced",
+                            n_jobs=-1,
+                        ),
+                    ),
                 ]
             ),
         ),
         (
-            "nb",
+            "sgd",
             Pipeline(
                 [
-                    ("to_np", to_np_tf),
-                    ("clf", GaussianNB()),
+                    ("scaler", StandardScaler()),
+                    (
+                        "clf",
+                        SGDClassifier(
+                            loss="log_loss",
+                            max_iter=2000,
+                            tol=1e-3,
+                            class_weight="balanced",
+                            random_state=random_state,
+                        ),
+                    ),
                 ]
-            ),
-        ),
-        (
-            "dt",
-            DecisionTreeClassifier(
-                random_state=random_state,
-                class_weight="balanced",
             ),
         ),
         (
@@ -448,25 +461,37 @@ def build_base_learners(
             ),
         ),
         (
-            "svm",
-            Pipeline(
-                [
-                    ("scaler", StandardScaler()),
-                    (
-                        "clf",
-                        SVC(
-                            kernel="rbf",
-                            C=1.0,
-                            gamma="scale",
-                            probability=False,  # <<< lebih cepat, pakai decision_function
-                            class_weight="balanced",
-                            random_state=random_state,
-                        ),
-                    ),
-                ]
+            "gb",
+            HistGradientBoostingClassifier(
+                max_depth=None,
+                learning_rate=0.05,
+                max_iter=300,
+                random_state=random_state,
             ),
         ),
     ]
+
+    # XGBoost (opsional)
+    with suppress(Exception):
+        from xgboost import XGBClassifier  # type: ignore
+
+        learners.append(
+            (
+                "xgb",
+                XGBClassifier(
+                    n_estimators=400,
+                    max_depth=5,
+                    learning_rate=0.05,
+                    subsample=0.8,
+                    colsample_bytree=0.8,
+                    objective="binary:logistic",
+                    eval_metric="logloss",
+                    tree_method="hist",
+                    random_state=random_state,
+                    n_jobs=-1,
+                ),
+            )
+        )
 
     # --- MLP / Neural Network (opsional) ---
     if with_mlp:
@@ -492,6 +517,30 @@ def build_base_learners(
                 )
             )
 
+    # GaussianNB & KNN bisa dipertahankan untuk uji banding (kalau ingin)
+    learners.extend(
+        [
+            (
+                "nb",
+                Pipeline(
+                    [
+                        ("to_np", to_np_tf),
+                        ("clf", GaussianNB()),
+                    ]
+                ),
+            ),
+            (
+                "knn",
+                Pipeline(
+                    [
+                        ("scaler", StandardScaler()),
+                        ("clf", KNeighborsClassifier(n_neighbors=11)),
+                    ]
+                ),
+            ),
+        ]
+    )
+
     return learners
 
 
@@ -506,7 +555,7 @@ def build_stacking(
         final_estimator=LogisticRegression(max_iter=8000, class_weight="balanced"),
         cv=cv,
         passthrough=passthrough,
-        stack_method="auto",  # <<< auto: proba jika ada, else decision_function/predict
+        stack_method="auto",  # proba jika ada, else decision_function/predict
         n_jobs=1,
     )
 
@@ -630,7 +679,7 @@ def plot_pr(
     _savefig(out_png)
 
 
-# ---------- Hyperparameter & arsitektur helpers ----------
+# ---------- Hyperparameter & runtime helpers ----------
 def _append_hyperparam_rows(
     hyper_rows: List[Dict[str, str]],
     dataset: str,
@@ -665,97 +714,14 @@ def _append_hyperparam_rows(
     )
 
 
-def plot_stacking_architecture(model_names: List[str], out_png: Path) -> None:
-    """
-    Gambar arsitektur stacking sederhana:
-    beberapa base learner → 1 meta-learner (Logistic Regression).
-    """
-    if not model_names:
-        return
-
-    _, ax = plt.subplots(figsize=(7.0, 3.5 + 0.25 * len(model_names)))
-    ax.set_xlim(0, 1)
-    ax.set_ylim(0, 1)
-    ax.axis("off")
-
-    box_w, box_h = 0.32, 0.06
-    top_y = 0.9
-    spacing = 0.08
-
-    centers_y: List[float] = []
-    for i, name in enumerate(model_names):
-        y = top_y - i * spacing
-        centers_y.append(y + box_h / 2)
-        rect = FancyBboxPatch(
-            (0.05, y),
-            box_w,
-            box_h,
-            boxstyle="round,pad=0.02",
-            edgecolor="black",
-            facecolor="#e0f0ff",
-        )
-        ax.add_patch(rect)
-        ax.text(
-            0.05 + box_w / 2,
-            y + box_h / 2,
-            name.upper(),
-            ha="center",
-            va="center",
-            fontsize=9,
-        )
-
-    # Meta-learner di kanan
-    meta_x = 0.6
-    meta_y = 0.5
-    meta_rect = FancyBboxPatch(
-        (meta_x, meta_y - box_h / 2),
-        box_w,
-        box_h,
-        boxstyle="round,pad=0.02",
-        edgecolor="black",
-        facecolor="#ffe0e0",
-    )
-    ax.add_patch(meta_rect)
-    ax.text(
-        meta_x + box_w / 2,
-        meta_y,
-        "META-LEARNER\n(Logistic Regression)",
-        ha="center",
-        va="center",
-        fontsize=9,
-    )
-
-    # Panah dari base → meta
-    for cy in centers_y:
-        arrow = FancyArrowPatch(
-            (0.05 + box_w, cy),
-            (meta_x, meta_y),
-            arrowstyle="->",
-            mutation_scale=10,
-            linewidth=1.0,
-        )
-        ax.add_patch(arrow)
-
-    ax.text(
-        0.5,
-        0.1,
-        "Stacking Ensemble: base learners menghasilkan prediksi / proba,\n"
-        "yang kemudian menjadi input bagi meta-learner.",
-        ha="center",
-        va="center",
-        fontsize=9,
-    )
-
-    _savefig(out_png)
-
-
 def make_runtime_summary(runtime_rows: List[Dict[str, float]]) -> None:
     """
     Buat reports/tables/runtime_summary.csv yang berisi:
     - dataset
     - use_smote
     - variant (nosmote / smote / smote_enn / smote_tomek)
-    - model (dt, rf, mlp, svm, nb, knn, stacking_lr_meta)
+    - cv
+    - model (rf, gb, xgb, lr, sgd, mlp, nb, knn, stacking_lr_meta)
     - fit_sec (waktu fit per model)
     - grid_sec (hanya terisi untuk stacking)
     - run_sec (durasi run_one, hanya diisi untuk stacking)
@@ -769,6 +735,7 @@ def make_runtime_summary(runtime_rows: List[Dict[str, float]]) -> None:
         "dataset",
         "use_smote",
         "variant",
+        "cv",
         "model",
         "fit_sec",
         "grid_sec",
@@ -816,8 +783,8 @@ def fit_and_eval_single(
     m["model"] = name
     m["fit_sec"] = round(time.time() - t0, 3)
     _log(
-        "[Stack]   > Done %s in %.2fs | acc=%.3f prec=%.3f"
-        % (name, m["fit_sec"], m["accuracy"], m["precision"])
+        "[Stack]   > Done %s in %.2fs | acc=%.3f prec=%.3f f1_macro=%.3f"
+        % (name, m["fit_sec"], m["accuracy"], m["precision"], m["f1_macro"])
     )
     return m
 
@@ -837,7 +804,8 @@ def run_one(
     runtime_rows: Optional[List[Dict[str, float]]] = None,
 ) -> Dict[str, float]:
     start_run = time.time()
-    suffix = _variant_to_tag(smote_variant) if use_smote else "nosmote"
+    base_tag = _variant_to_tag(smote_variant) if use_smote else "nosmote"
+    suffix = f"{base_tag}_cv{cv}"
     _log(f"[Stack] Start -> {dataset} ({suffix})")
 
     p_metrics = TAB / f"{dataset}_stack_{suffix}_metrics.csv"
@@ -877,12 +845,64 @@ def run_one(
         random_state,
     )
 
-    # Base learners: dt, rf, mlp (opsional), svm, nb, knn
-    base_learners = build_base_learners(random_state, with_mlp)
+    # Base learners (kandidat)
+    base_learners_all = build_base_learners(random_state, with_mlp)
     is_volc = dataset.lower() == "volcanic"
 
+    # ---------- CV untuk seleksi base learners ----------
+    cv_scores: List[Dict[str, float]] = []
+    for name, est in base_learners_all:
+        _log(f"[Stack]   > CV eval base {name} (cv={cv}) …")
+        try:
+            scores = cross_val_score(
+                est,
+                Xtr,
+                ytr,
+                cv=cv,
+                scoring="f1_macro",
+                n_jobs=1,
+            )
+            acc = float(np.mean(scores))
+            _log(f"[Stack]   > CV f1_macro {name}={acc:.3f}")
+        except Exception as exc:
+            _log(f"[WARN] CV eval for {name} failed: {exc!r}")
+            acc = float("nan")
+        cv_scores.append({"name": name, "cv_acc": acc})
+
+    if valid_accs := [d["cv_acc"] for d in cv_scores if np.isfinite(d["cv_acc"])]:
+        best_acc = max(valid_accs)
+        tol = 0.01  # toleransi; model dalam best_acc - tol tetap dipakai
+        selected_names = [
+            d["name"]
+            for d in cv_scores
+            if np.isfinite(d["cv_acc"]) and d["cv_acc"] >= best_acc - tol
+        ]
+        selected = [(n, e) for n, e in base_learners_all if n in selected_names]
+        dropped = [
+            (d["name"], d["cv_acc"])
+            for d in cv_scores
+            if d["name"] not in selected_names and np.isfinite(d["cv_acc"])
+        ]
+    else:
+        selected = base_learners_all
+        dropped = []
+
+    _log(
+        "[Stack]   > Selected base learners for stacking (cv=%d): %s"
+        % (cv, ", ".join([n for n, _ in selected]) if selected else "(none)")
+    )
+    if dropped:
+        _log(
+            "[Stack]   > Dropped weak learners: "
+            + ", ".join([f"{n} (f1_macro={a:.3f})" for n, a in dropped])
+        )
+
+    # Kalau entah kenapa tidak ada yang terpilih, fallback ke semua
+    base_learners_for_stack = selected or base_learners_all
+
+    # ---------- Stacking model ----------
     # volcanic: passthrough dimatikan agar meta-learner lebih stabil
-    stack = build_stacking(base_learners, cv, passthrough=(not is_volc))
+    stack = build_stacking(base_learners_for_stack, cv, passthrough=(not is_volc))
 
     grid_sec = 0.0
     best_meta: Optional[Dict[str, object]] = None
@@ -909,12 +929,18 @@ def run_one(
 
     # catat hyperparams final (setelah meta_grid) untuk tabel global
     if hyper_rows is not None:
-        _append_hyperparam_rows(hyper_rows, dataset, suffix, base_learners, stack)
+        _append_hyperparam_rows(
+            hyper_rows,
+            dataset,
+            suffix,
+            base_learners_for_stack,
+            stack,
+        )
 
     # --- Base learners (tulis waktu/performanya ke metrics.csv)
     rows: List[Dict[str, float]] = [
         fit_and_eval_single(name, est, Xtr, ytr, Xte, yte)
-        for name, est in base_learners
+        for name, est in base_learners_all
     ]
 
     # --- Fit stacking + OOF prob untuk threshold
@@ -971,14 +997,15 @@ def run_one(
     rows.append(m_stack)
     _log(
         f"[Stack]   > Done Stacking in {m_stack['fit_sec']:.2f}s | "
-        f"acc={m_stack['accuracy']:.3f} prec={m_stack['precision']:.3f}"
+        f"acc={m_stack['accuracy']:.3f} prec={m_stack['precision']:.3f} "
+        f"f1_macro={m_stack['f1_macro']:.3f}"
     )
 
     # --- Tabel metrics lengkap (+fit_sec) ---
     metrics_df = pd.DataFrame(rows)
-    if {"accuracy", "precision", "f1"} <= set(metrics_df.columns):
+    if {"accuracy", "precision", "f1_macro"} <= set(metrics_df.columns):
         metrics_df = metrics_df.sort_values(
-            ["accuracy", "precision", "f1"],
+            ["f1_macro", "pr_auc", "accuracy"],
             ascending=False,
         )
     _savetab(metrics_df, p_metrics)
@@ -991,7 +1018,12 @@ def run_one(
 
     # --- Confusion matrix: gambar + tabel CSV ---
     cm = confusion_matrix(yte.to_numpy(), y_pred, labels=[0, 1])
-    plot_confusion(yte.to_numpy(), y_pred, f"{dataset.title()} - {suffix}", p_cm_png)
+    plot_confusion(
+        yte.to_numpy(),
+        y_pred,
+        f"{dataset.title()} - {suffix}",
+        p_cm_png,
+    )
     cm_df = pd.DataFrame(
         cm,
         index=["True 0", "True 1"],
@@ -1054,7 +1086,8 @@ def run_one(
                 {
                     "dataset": dataset,
                     "use_smote": use_smote,
-                    "variant": suffix,  # nosmote / smote / smote_enn / smote_tomek
+                    "variant": base_tag,  # nosmote / smote / smote_enn / smote_tomek
+                    "cv": cv,
                     "model": model_name,
                     "fit_sec": float(r.get("fit_sec", float("nan"))),
                     "grid_sec": grid_sec if is_stack else 0.0,
@@ -1068,11 +1101,13 @@ def run_one(
     return {
         "dataset": dataset,
         "use_smote": use_smote,
-        "variant": suffix,
+        "variant": base_tag,
+        "cv": cv,
         "accuracy": float(m_stack["accuracy"]),
         "precision": float(m_stack["precision"]),
         "recall": float(m_stack["recall"]),
         "f1": float(m_stack["f1"]),
+        "f1_macro": float(m_stack["f1_macro"]),
         "roc_auc": float(m_stack["roc_auc"]),
         "pr_auc": float(m_stack["pr_auc"]),
         "brier": float(m_stack.get("brier", float("nan"))),
@@ -1087,9 +1122,9 @@ def run_one(
 
 # ---------------- CLI ----------------
 def main() -> None:
-    ap = argparse.ArgumentParser(description="Stacking Ensemble + SMOTE ablation")
+    ap = argparse.ArgumentParser(description="Stacking Ensemble + SMOTE ablation (CV=5)")
     ap.add_argument("--datasets", nargs="+", default=["tectonic", "volcanic"])
-    ap.add_argument("--cv", type=int, default=3)
+    ap.add_argument("--cv", type=int, default=5)  # gunakan 5 saja secara default
     ap.add_argument("--random-state", type=int, default=42)
 
     ap.add_argument("--meta-grid", dest="meta_grid", action="store_true")
@@ -1110,20 +1145,11 @@ def main() -> None:
         default="none",
     )
     ap.add_argument("--top-n", type=int, default=30)
-    ap.add_argument(
-        "--ablation",
-        action="store_true",
-        help="run non-SMOTE + SMOTE + SMOTE_TOMEK + SMOTEENN and write ablation_smote.csv",
-    )
-    ap.add_argument(
-        "--use-smote",
-        choices=["auto", "yes", "no"],
-        default="auto",
-    )
     args = ap.parse_args()
 
     meta_grid = args.meta_grid
     fast_n = args.fast_n if args.fast else None
+    cv = args.cv
 
     _log("[Stack] Pipeline start …")
 
@@ -1131,71 +1157,33 @@ def main() -> None:
     hyper_rows: List[Dict[str, str]] = []
     runtime_rows: List[Dict[str, float]] = []
 
-    # Buat diagram arsitektur stacking sekali saja (pakai konfigurasi base learner default)
-    example_learners = build_base_learners(args.random_state, args.with_mlp)
-    plot_stacking_architecture(
-        [name for name, _ in example_learners],
-        FIG / "stacking_architecture.png",
-    )
+    sampling_settings = [
+        (False, None),           # nosmote
+        (True, "smote"),         # smote
+        (True, "smote_tomek"),   # smote+Tomek
+        (True, "smoteenn"),      # SMOTEENN
+    ]
 
     for ds in args.datasets:
-        if args.ablation:
-            # non-SMOTE
-            ablation_rows.append(
-                run_one(
-                    ds,
-                    use_smote=False,
-                    smote_variant=None,
-                    cv=args.cv,
-                    random_state=args.random_state,
-                    with_mlp=args.with_mlp,
-                    fast_sample=fast_n,
-                    feature_select=args.feature_select,
-                    top_n=args.top_n,
-                    meta_grid=meta_grid,
-                    hyper_rows=hyper_rows,
-                    runtime_rows=runtime_rows,
-                )
-            )
-            # semua varian SMOTE (cek file)
-            for var in SMOTE_VARIANTS:
+        for use_sm, var in sampling_settings:
+            if use_sm:
                 tag = _variant_to_tag(var)
                 csv_path = PROCESSED / f"{ds}_train_{tag}.csv"
                 if not csv_path.exists():
                     _log(f"[WARN] {csv_path.name} not found, skip {var} for {ds}.")
                     continue
-                ablation_rows.append(
-                    run_one(
-                        ds,
-                        use_smote=True,
-                        smote_variant=var,
-                        cv=args.cv,
-                        random_state=args.random_state,
-                        with_mlp=args.with_mlp,
-                        fast_sample=fast_n,
-                        feature_select=args.feature_select,
-                        top_n=args.top_n,
-                        meta_grid=meta_grid,
-                        hyper_rows=hyper_rows,
-                        runtime_rows=runtime_rows,
-                    )
-                )
-        else:
-            if args.use_smote == "auto":
-                use_sm = (
-                    (PROCESSED / f"{ds}_train_{_variant_to_tag('smote')}.csv").exists()
-                    or (PROCESSED / f"{ds}_train_smote.csv").exists()
-                )
             else:
-                use_sm = args.use_smote == "yes"
+                csv_path = PROCESSED / f"{ds}_train.csv"
+                if not csv_path.exists():
+                    _log(f"[WARN] {csv_path.name} not found, skip nosmote for {ds}.")
+                    continue
 
-            var = "smote" if use_sm else None
             ablation_rows.append(
                 run_one(
-                    ds,
+                    dataset=ds,
                     use_smote=use_sm,
                     smote_variant=var,
-                    cv=args.cv,
+                    cv=cv,
                     random_state=args.random_state,
                     with_mlp=args.with_mlp,
                     fast_sample=fast_n,

@@ -232,7 +232,6 @@ def _load_manual_exclude(path: Path) -> Dict[str, List[float]]:
     return excl
 
 
-
 def _apply_manual_exclude(
     df: pd.DataFrame,
     dataset: str,
@@ -277,7 +276,6 @@ def _apply_kanamori_levelA(
     mask = (df["mag"] >= min_mag) & (df["depth"] <= max_depth)
     out = df.loc[mask].reset_index(drop=True)
     after = len(out)
-
 
     if after == 0:
         print(
@@ -465,7 +463,7 @@ def prepare_tectonic(df: pd.DataFrame) -> pd.DataFrame:
     - longitude   : float64
     - depth       : float64
     - mag         : float64
-    - mmi_int     : float64  (NEW)
+    - mmi_int     : float64
     - tsu         : int64
     """
     # mapping khusus dari spesifikasi kolom raw
@@ -499,7 +497,7 @@ def prepare_tectonic(df: pd.DataFrame) -> pd.DataFrame:
             "mb",
             "ml",
             "region",
-            "mmi_int",  # NEW
+            "mmi_int",
         ],
     )
 
@@ -525,7 +523,7 @@ def prepare_tectonic(df: pd.DataFrame) -> pd.DataFrame:
         "longitude",
         "depth",
         "mag",
-        "mmi_int",  # NEW
+        "mmi_int",
         "tsu",
     ]
     existing = [c for c in wanted if c in df.columns]
@@ -554,7 +552,7 @@ def prepare_tectonic(df: pd.DataFrame) -> pd.DataFrame:
         "longitude",
         "depth",
         "mag",
-        "mmi_int",  # NEW
+        "mmi_int",
         "region",
     ]
     for c in num_cols_float:
@@ -704,7 +702,7 @@ def encode_and_scale(
             for c in (
                 "mag",
                 "depth",
-                "mmi_int",   # NEW: gunakan MMI sebagai fitur
+                "mmi_int",
                 "latitude",
                 "longitude",
                 "year",
