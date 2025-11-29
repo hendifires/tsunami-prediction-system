@@ -10,6 +10,8 @@ from joblib import dump
 from sklearn.compose import ColumnTransformer
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import OneHotEncoder, StandardScaler
+from sklearn.impute import SimpleImputer
+from sklearn.model_selection import train_test_split
 
 
 # ================== PATHS ==================
@@ -680,15 +682,19 @@ def prepare_volcanic(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 
-# ================== NORMALIZATION + ENCODING ==================
+# ================== NORMALIZATION + ENCODING (PER DOMAIN) ==================
 def encode_and_scale(
     df: pd.DataFrame,
     dataset: str,
     normalize: bool = True,
 ) -> Tuple[pd.DataFrame, Pipeline | None, List[str], List[str]]:
     """
-    Buat dataset final fitur (scaled + one-hot) + kolom target 'tsu' di akhir.
-    NOTE: Untuk training final, scaler/encoder akan berada di dalam CV Pipeline.
+    Buat dataset final fitur (scaled + one-hot) + kolom target 'tsu' di akhir
+    untuk masing-masing domain (tectonic / volcanic).
+
+    Catatan: Untuk pipeline Stacking multi-class, kita akan membangun dataset
+    gabungan events (lihat build_events_dataset). Fungsi ini tetap dipertahankan
+    karena dipakai untuk tabel skema domain di tesis.
     """
     if "tsu" not in df.columns:
         raise KeyError(f"[{dataset}] kolom target 'tsu' tidak ditemukan setelah cleaning.")
@@ -769,6 +775,188 @@ def encode_and_scale(
     return X_df, pipe, num_cols, cat_cols
 
 
+# ================== DATASET GABUNGAN EVENTS (MULTI-CLASS 0/1/2) ==================
+
+def build_events_dataset(
+    df_t_clean: pd.DataFrame,
+    df_v_clean: pd.DataFrame,
+    min_year_modern: int = 1900,
+) -> pd.DataFrame:
+    """
+    Bangun dataset gabungan multi-class untuk Stacking:
+
+    label:
+        0 = non-tsunami
+        1 = tsunami tektonik
+        2 = tsunami vulkanik
+
+    Aturan label:
+    - Data tektonik: domain sudah "earthquake", jadi:
+        tsu == 1 -> label = 1
+        tsu == 0 -> label = 0
+    - Data vulkanik: domain sudah "volcanic eruption", jadi:
+        tsu == 1 -> label = 2
+        tsu == 0 -> label = 0
+
+    Fitur utama (disederhanakan):
+    - Tektonik : mag, depth, latitude, longitude
+    - Vulkanik : vei, elevation, latitude, longitude
+
+    Dataset gabungan memakai union dari fitur-fitur di atas.
+    Untuk domain yang tidak punya suatu fitur, kolom tersebut diisi NaN
+    dan akan diimputasi di langkah berikutnya.
+    """
+    df_t = df_t_clean.copy()
+    df_v = df_v_clean.copy()
+
+    # Filter era modern (>= min_year_modern)
+    if "year" in df_t.columns:
+        before_t = len(df_t)
+        df_t = df_t[df_t["year"] >= float(min_year_modern)]
+        print(f"[Events] Tectonic: year >= {min_year_modern}: {before_t} -> {len(df_t)} baris.")
+    if "year" in df_v.columns:
+        before_v = len(df_v)
+        df_v = df_v[df_v["year"] >= float(min_year_modern)]
+        print(f"[Events] Volcanic: year >= {min_year_modern}: {before_v} -> {len(df_v)} baris.")
+
+    # Pastikan kolom tsu ada
+    if "tsu" not in df_t.columns or "tsu" not in df_v.columns:
+        raise KeyError("[Events] Kolom 'tsu' tidak ditemukan di salah satu domain.")
+
+    # Label multi-class
+    df_t["label"] = np.where(df_t["tsu"] == 1, 1, 0)
+    df_v["label"] = np.where(df_v["tsu"] == 1, 2, 0)
+
+    # Definisi fitur domain-spesifik
+    tectonic_feats = ["mag", "depth", "latitude", "longitude"]
+    volcanic_feats = ["vei", "elevation", "latitude", "longitude"]
+
+    base_cols = sorted(set(tectonic_feats + volcanic_feats))
+
+    # Pastikan semua kolom fitur ada di kedua domain (kalau tidak, isi NaN)
+    for c in base_cols:
+        if c not in df_t.columns:
+            df_t[c] = np.nan
+        if c not in df_v.columns:
+            df_v[c] = np.nan
+
+    cols = base_cols + ["label"]
+
+    events_t = df_t[cols].copy()
+    events_v = df_v[cols].copy()
+
+    events = pd.concat([events_t, events_v], ignore_index=True)
+
+    # Drop baris yang label-nya NaN (harusnya tidak ada)
+    events = events.dropna(subset=["label"])
+    events["label"] = events["label"].astype("int64")
+
+    print(
+        "[Events] Dataset gabungan dibuat: "
+        f"{len(events)} baris, {events.shape[1]} kolom (fitur+label)."
+    )
+
+    return events
+
+
+def split_and_save_events(
+    events: pd.DataFrame,
+    test_size: float = 0.2,
+    random_state: int = 42,
+    normalize: bool = True,
+) -> Tuple[pd.DataFrame, pd.DataFrame]:
+    """
+    Split dataset gabungan events menjadi train/test terstratifikasi,
+    lalu (opsional) normalisasi + imputasi secara ANTI-LEAKAGE:
+
+    - Fit imputer+scaler hanya di X_train
+    - Transform ke X_train dan X_test
+    - Simpan ke:
+        data/processed/events_train.csv
+        data/processed/events_test.csv
+
+    Kolom target: 'label' (0/1/2).
+    """
+    if "label" not in events.columns:
+        raise KeyError("[Events] Kolom 'label' tidak ditemukan di dataset gabungan.")
+
+    y = events["label"].astype("int64")
+    X = events.drop(columns=["label"])
+
+    X_train, X_test, y_train, y_test = train_test_split(
+        X,
+        y,
+        test_size=test_size,
+        random_state=random_state,
+        stratify=y,
+    )
+
+    if not normalize:
+        train_df = X_train.copy()
+        train_df["label"] = y_train.values
+        test_df = X_test.copy()
+        test_df["label"] = y_test.values
+
+        train_df.to_csv(PROCESSED / "events_train.csv", index=False)
+        test_df.to_csv(PROCESSED / "events_test.csv", index=False)
+
+        print(
+            "[Events] Split train/test tanpa normalisasi.\n"
+            f" - events_train.csv : {train_df.shape}\n"
+            f" - events_test.csv  : {test_df.shape}"
+        )
+        return train_df, test_df
+
+    # Semua fitur di sini numerik (mag, depth, vei, elevation, lat, lon)
+    num_cols = X_train.columns.tolist()
+
+    ct = ColumnTransformer(
+        transformers=[
+            (
+                "num",
+                Pipeline(
+                    steps=[
+                        ("imputer", SimpleImputer(strategy="median")),
+                        ("scaler", StandardScaler()),
+                    ]
+                ),
+                num_cols,
+            )
+        ],
+        remainder="drop",
+        verbose_feature_names_out=False,
+    )
+
+    pipe = Pipeline([("ct", ct)])
+
+    X_train_t = pipe.fit_transform(X_train)
+    X_test_t = pipe.transform(X_test)
+
+    # Karena hanya ada satu transformer numerik, nama kolom tetap num_cols
+    out_cols = num_cols
+
+    train_df = pd.DataFrame(X_train_t, columns=out_cols, index=X_train.index)
+    test_df = pd.DataFrame(X_test_t, columns=out_cols, index=X_test.index)
+    train_df["label"] = y_train.values
+    test_df["label"] = y_test.values
+
+    train_df.to_csv(PROCESSED / "events_train.csv", index=False)
+    test_df.to_csv(PROCESSED / "events_test.csv", index=False)
+
+    dump(pipe, ART / "events_preprocess_pipe.joblib")
+    pd.DataFrame({"feature": out_cols}).to_csv(
+        TAB / "events_feature_names.csv", index=False
+    )
+
+    print(
+        "[Events] Split train/test + normalisasi selesai.\n"
+        f" - events_train.csv : {train_df.shape}\n"
+        f" - events_test.csv  : {test_df.shape}"
+    )
+
+    return train_df, test_df
+
+
 # ================== WRITE/REUSE HELPERS ==================
 def _save_or_reuse_clean(
     df_t_clean: pd.DataFrame,
@@ -811,6 +999,7 @@ def main(
     kanamori_levelA: bool = False,
     min_mag: float = 7.0,
     max_depth: float = 70.0,
+    min_year_modern: int = 1900,
 ) -> None:
     # cari file mentah (nama baru & fallback)
     raw_tec = next(
@@ -892,7 +1081,7 @@ def main(
     _save_schema_and_samples(df_t_clean, "tectonic")
     _save_schema_and_samples(df_v_clean, "volcanic")
 
-    # ---------- (OPSIONAL) NORMALIZATION + ENCODING ----------
+    # ---------- (OPSIONAL) NORMALIZATION + ENCODING PER DOMAIN ----------
     df_t_prep, _, _, _ = encode_and_scale(
         df_t_clean,
         dataset="tectonic",
@@ -909,23 +1098,46 @@ def main(
     _maybe_write_csv(df_t_prep, out_t_prep, effective_overwrite, "preprocessed tectonic")
     _maybe_write_csv(df_v_prep, out_v_prep, effective_overwrite, "preprocessed volcanic")
 
+    # ---------- NEW: DATASET GABUNGAN EVENTS UNTUK STACKING MULTI-CLASS ----------
+    events = build_events_dataset(
+        df_t_clean=df_t_clean,
+        df_v_clean=df_v_clean,
+        min_year_modern=min_year_modern,
+    )
+    events_clean_path = PROCESSED / "events_clean.csv"
+    events.to_csv(events_clean_path, index=False)
+
+    df_events_train, df_events_test = split_and_save_events(
+        events,
+        test_size=0.2,
+        random_state=42,
+        normalize=normalize,
+    )
+
+    # Ringkasan bentuk untuk semua dataset utama
     _save_shape_summary(
         [
             ("tectonic_clean", len(df_t_clean), df_t_clean.shape[1]),
             ("volcanic_clean", len(df_v_clean), df_v_clean.shape[1]),
             ("tectonic_preprocessed", len(df_t_prep), df_t_prep.shape[1]),
             ("volcanic_preprocessed", len(df_v_prep), df_v_prep.shape[1]),
+            ("events_clean", len(events), events.shape[1]),
+            ("events_train", len(df_events_train), df_events_train.shape[1]),
+            ("events_test", len(df_events_test), df_events_test.shape[1]),
         ]
     )
 
     print(
         "[DONE] Preprocessing selesai.\n"
-        f"- Clean (tectonic)  : {PROCESSED / 'tectonic.csv'}\n"
-        f"- Clean (volcanic)  : {PROCESSED / 'volcanic.csv'}\n"
-        f"- Preprocessed (tec): {out_t_prep}\n"
-        f"- Preprocessed (vul): {out_v_prep}\n"
-        f"- Artifacts (pipes/cols): {ART}\n"
-        f"- QC tables & schema: {TAB}\n"
+        f"- Clean (tectonic)   : {PROCESSED / 'tectonic.csv'}\n"
+        f"- Clean (volcanic)   : {PROCESSED / 'volcanic.csv'}\n"
+        f"- Preprocessed (tec) : {out_t_prep}\n"
+        f"- Preprocessed (vul) : {out_v_prep}\n"
+        f"- Events (clean)     : {events_clean_path}\n"
+        f"- Events (train)     : {PROCESSED / 'events_train.csv'}\n"
+        f"- Events (test)      : {PROCESSED / 'events_test.csv'}\n"
+        f"- Artifacts (pipes)  : {ART}\n"
+        f"- QC tables & schema : {TAB}\n"
     )
 
 
@@ -933,7 +1145,7 @@ if __name__ == "__main__":
     ap = argparse.ArgumentParser(
         description=(
             "Preprocessing = Filtering + Cleaning + "
-            "(Optional) Normalization+Encoding"
+            "(Optional) Normalization+Encoding + Build events dataset"
         )
     )
     ap.add_argument(
@@ -944,7 +1156,7 @@ if __name__ == "__main__":
     ap.add_argument(
         "--no-normalize",
         action="store_true",
-        help="skip normalization & encoding, save only clean CSVs",
+        help="skip normalization & encoding (domain & events)",
     )
     ap.add_argument(
         "--kanamori-levelA",
@@ -966,6 +1178,15 @@ if __name__ == "__main__":
         default=70.0,
         help="Batas atas kedalaman (km) untuk Kanamori Level A (default=70).",
     )
+    ap.add_argument(
+        "--min-year-modern",
+        type=int,
+        default=1900,
+        help=(
+            "Batas bawah tahun untuk dataset gabungan events "
+            "(event dengan year < min-year-modern akan dibuang)."
+        ),
+    )
     args = ap.parse_args()
     main(
         overwrite=args.overwrite,
@@ -973,4 +1194,5 @@ if __name__ == "__main__":
         kanamori_levelA=args.kanamori_levelA,
         min_mag=args.min_mag,
         max_depth=args.max_depth,
+        min_year_modern=args.min_year_modern,
     )

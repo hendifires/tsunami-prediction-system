@@ -4,14 +4,17 @@ from __future__ import annotations
 """
 Compare multiple stacking runs (nosmote / smote / smote_tomek / smote_enn)
 dari output stacking_pipeline.py (cv=5), dan sekaligus membandingkan
-kinerja base learners tertentu terhadap stacking ensemble.
+kinerja base learners tertentu terhadap meta-learner Logistic Regression
+di dalam stacking ensemble.
 
 Outputs utama:
 
 1) Ringkasan stacking (per dataset & varian SMOTE)
    - reports/tables/compare_runs.csv
    - reports/tables/compare_runs.md
-   - reports/figures/compare_stacking_<metric>.png   (opsional; grouped bar antar varian)
+   - reports/figures/compare_stacking_<metric>.png
+       (untuk SEMUA metric di _METRICS_MAIN, grouped bar antar varian
+        dan antar domain tectonic/volcanic)
 
    Setiap baris = (dataset, variant), berisi metrik dari model
    'stacking_lr_meta' (atau fallback baris dengan F1 tertinggi).
@@ -20,16 +23,26 @@ Outputs utama:
    - reports/tables/smote_effects_by_variant.csv
    - reports/figures/smote_effects_f1.png
 
-3) Perbandingan base learners vs stacking (model terpilih saja)
-   Model yang dibandingkan:
-       RF, GB, DT, NB, KNN  vs  stacking_lr_meta
+   Tambahan:
+   - reports/tables/smote_paired_stats.csv
+   - reports/tables/smote_paired_stats.md
+     berisi ringkasan paired t-test & Cohen's d:
+     nosmote vs (smote / smote_tomek / smote_enn) untuk tiap metric.
+
+3) Perbandingan base learners vs meta-learner (stacking_lr_meta)
+   Base learner yang dibandingkan:
+       RF, GB, DT, NB, KNN  vs  stacking_lr_meta (meta-learner Logistic Regression)
 
    - reports/tables/base_vs_stack.csv
         format long: satu baris per (dataset, variant, model)
+        kolom:
+        accuracy, precision, recall, f1, f1_macro, roc_auc, pr_auc, brier,
+        tn, fp, fn, tp, model, fit_sec, grid_sec
    - reports/tables/base_vs_stack.md
         versi markdown (siap copas ke tesis)
    - reports/figures/base_vs_stack_<dataset>_<metric>.png
-        grouped bar per dataset: x = model, hue = varian sampling
+        grouped bar per dataset: x = model, hue = varian sampling,
+        untuk SEMUA metric di _METRICS_MAIN.
 
 Catatan penting:
 - Script ini mengasumsikan adanya file metrics:
@@ -41,6 +54,7 @@ Catatan penting:
 """
 
 import argparse
+from contextlib import suppress
 from pathlib import Path
 from typing import Dict, List, Optional
 
@@ -70,6 +84,7 @@ _METRIC_COLS: List[str] = [
     "precision",
     "recall",
     "f1",
+    "f1_macro",
     "roc_auc",
     "pr_auc",
     "brier",
@@ -81,17 +96,19 @@ _METRIC_COLS: List[str] = [
     "grid_sec",
 ]
 
+# Metrik utama untuk ringkasan & plotting
 _METRICS_MAIN: List[str] = [
     "accuracy",
     "precision",
     "recall",
     "f1",
+    "f1_macro",
     "roc_auc",
     "pr_auc",
     "brier",
 ]
 
-# Model base yang akan dibandingkan dengan stacking
+# Model base yang akan dibandingkan dengan meta-learner (stacking)
 BASE_FOR_COMPARE: List[str] = ["rf", "gb", "dt", "nb", "knn"]
 STACK_MODEL_NAME = "stacking_lr_meta"
 
@@ -220,7 +237,10 @@ def _order_categories(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def _plot_bar(df: pd.DataFrame, metric: str, path: Path) -> None:
-    """Grouped bar: x = variant, hue = dataset (untuk stacking summary)."""
+    """
+    Grouped bar: x = variant, hue = dataset (untuk stacking summary)
+    untuk satu metric tertentu.
+    """
     if metric not in df.columns or df.empty:
         _log(f"[INFO] cannot plot: metric '{metric}' missing or df empty.")
         return
@@ -356,10 +376,88 @@ def _plot_smote_effects_f1(df_eff: pd.DataFrame, path: Path) -> None:
     _savefig(path)
 
 
+def compute_smote_paired_stats(df_eff: pd.DataFrame) -> pd.DataFrame:
+    """
+    Hitung statistik paired t-test dan Cohen's d untuk ablation SMOTE.
+
+    Input: df_eff dari compute_smote_effects (berisi *_base, *_variant, *_delta)
+    Output: satu baris per (variant, metric):
+        variant, metric, n,
+        mean_base, mean_variant, mean_delta, sd_delta,
+        cohen_d, t_stat, p_value
+    """
+    if df_eff.empty:
+        return pd.DataFrame()
+
+    rows: List[Dict[str, object]] = []
+
+    variants = sorted(df_eff["variant"].unique())
+    for var in variants:
+        sub = df_eff[df_eff["variant"] == var]
+        if sub.empty:
+            continue
+
+        for metric in _METRICS_MAIN:
+            base_col = f"{metric}_base"
+            var_col = f"{metric}_variant"
+
+            if base_col not in sub.columns or var_col not in sub.columns:
+                continue
+
+            base_vals = pd.to_numeric(sub[base_col], errors="coerce")
+            var_vals = pd.to_numeric(sub[var_col], errors="coerce")
+            mask = base_vals.notna() & var_vals.notna()
+
+            base_arr = base_vals[mask].to_numpy()
+            var_arr = var_vals[mask].to_numpy()
+            if base_arr.size == 0:
+                continue
+
+            diff = var_arr - base_arr
+            n = diff.size
+            mean_base = float(np.mean(base_arr))
+            mean_var = float(np.mean(var_arr))
+            mean_delta = float(np.mean(diff))
+
+            if n > 1:
+                sd_delta = float(np.std(diff, ddof=1))
+                cohen_d = mean_delta / sd_delta if sd_delta > 0 else np.nan
+            else:
+                sd_delta = np.nan
+                cohen_d = np.nan
+
+            t_stat = np.nan
+            p_value = np.nan
+            if n > 1:
+                with suppress(Exception):
+                    from scipy import stats
+
+                    t_res = stats.ttest_rel(var_arr, base_arr, nan_policy="omit")
+                    t_stat = float(t_res.statistic)
+                    p_value = float(t_res.pvalue)
+
+            rows.append(
+                {
+                    "variant": var,
+                    "metric": metric,
+                    "n": int(n),
+                    "mean_base": mean_base,
+                    "mean_variant": mean_var,
+                    "mean_delta": mean_delta,
+                    "sd_delta": sd_delta,
+                    "cohen_d": cohen_d,
+                    "t_stat": t_stat,
+                    "p_value": p_value,
+                }
+            )
+
+    return pd.DataFrame(rows)
+
+
 def handle_smote_effects(df: pd.DataFrame) -> None:
     """
-    Wrapper terpisah untuk menghitung & menyimpan efek SMOTE,
-    agar blok kode di main() tetap ringkas.
+    Wrapper terpisah untuk menghitung & menyimpan efek SMOTE
+    dan statistik paired t-test + Cohen's d.
     """
     eff_df = compute_smote_effects(df)
     if eff_df.empty:
@@ -374,6 +472,19 @@ def handle_smote_effects(df: pd.DataFrame) -> None:
     _plot_smote_effects_f1(eff_df, eff_fig)
     _log(f"[Compare] Saved SMOTE F1 effects: {eff_fig}")
 
+    # ---- Paired t-test & Cohen's d ----
+    stats_df = compute_smote_paired_stats(eff_df)
+    if stats_df.empty:
+        _log("[Compare] Paired stats not computed (insufficient data).")
+        return
+
+    stats_csv = TAB / "smote_paired_stats.csv"
+    stats_md = TAB / "smote_paired_stats.md"
+    _save_csv(stats_df, stats_csv)
+    _save_md_table(stats_df, stats_md)
+    _log(f"[Compare] Saved SMOTE paired stats CSV: {stats_csv}")
+    _log(f"[Compare] Saved SMOTE paired stats MD : {stats_md}")
+
 
 # ---------- Base vs Stacking helpers ----------
 def collect_base_vs_stack(
@@ -382,11 +493,13 @@ def collect_base_vs_stack(
 ) -> pd.DataFrame:
     """
     Ambil metrik untuk base learners tertentu (RF, GB, DT, NB, KNN)
-    dan stacking_lr_meta, untuk setiap (dataset, variant).
+    dan stacking_lr_meta (meta-learner Logistic Regression),
+    untuk setiap (dataset, variant).
 
     Output long-format:
     - dataset, variant, model
-    - accuracy, precision, recall, f1, roc_auc, pr_auc, brier, fit_sec
+    - accuracy, precision, recall, f1, f1_macro, roc_auc, pr_auc, brier,
+      tn, fp, fn, tp, fit_sec, grid_sec
     """
     rows: List[Dict[str, object]] = []
 
@@ -418,12 +531,9 @@ def collect_base_vs_stack(
                     "variant": var,
                     "model": model_name,
                 }
-                for col in _METRICS_MAIN:
+                # isi semua kolom metrik & runtime yang diminta
+                for col in _METRIC_COLS:
                     out[col] = pd.to_numeric(r.get(col, np.nan), errors="coerce")
-                out["fit_sec"] = pd.to_numeric(
-                    r.get("fit_sec", np.nan),
-                    errors="coerce",
-                )
                 rows.append(out)
 
     df_out = pd.DataFrame(rows)
@@ -456,8 +566,8 @@ def _plot_base_vs_stack_per_dataset(
     path: Path,
 ) -> None:
     """
-    Grouped bar untuk satu dataset:
-    x = model (RF, GB, DT, NB, KNN, stacking)
+    Grouped bar untuk satu dataset & satu metric:
+    x = model (RF, GB, DT, NB, KNN, stacking_lr_meta)
     hue = varian sampling (nosmote, smote, smote_tomek, smote_enn)
     """
     if df_bvs.empty or metric not in df_bvs.columns:
@@ -503,7 +613,10 @@ def _plot_base_vs_stack_per_dataset(
 # ---------------- CLI ----------------
 def main() -> None:
     ap = argparse.ArgumentParser(
-        description="Aggregate & compare stacking (SMOTE variants) + base vs stacking"
+        description=(
+            "Aggregate & compare stacking (SMOTE variants) + "
+            "base learners (RF, GB, DT, NB, KNN) vs meta-learner Logistic Regression"
+        )
     )
     ap.add_argument("--datasets", nargs="+", default=DATASETS, choices=DATASETS)
     ap.add_argument("--variants", nargs="+", default=VARIANT_TAGS, choices=VARIANT_TAGS)
@@ -525,15 +638,21 @@ def main() -> None:
     )
     ap.add_argument(
         "--plot-metric",
-        default="accuracy",
-        choices=_METRICS_MAIN + ["none"],
-        help="metric untuk grouped bar stacking (none = tidak digambar)",
+        default="all",
+        choices=_METRICS_MAIN + ["none", "all"],
+        help=(
+            "metric untuk grouped bar stacking. "
+            "'all' = buat plot untuk semua metric, 'none' = tidak digambar"
+        ),
     )
     ap.add_argument(
         "--base-metric",
-        default="f1",
-        choices=_METRICS_MAIN,
-        help="metric utama untuk plot base vs stacking",
+        default="all",
+        choices=_METRICS_MAIN + ["all"],
+        help=(
+            "metric utama untuk plot base vs stacking. "
+            "'all' = buat plot untuk semua metric."
+        ),
     )
     args = ap.parse_args()
 
@@ -558,15 +677,22 @@ def main() -> None:
     _log(f"[Compare] Saved stacking summary CSV: {out_csv}")
     _log(f"[Compare] Saved stacking summary MD : {out_md}")
 
+    # --- Plot stacking summary untuk semua metric (atau satu metric) ---
     if args.plot_metric != "none":
-        fig_path = FIG / f"compare_stacking_{args.plot_metric}.png"
-        _plot_bar(df_stack, args.plot_metric, fig_path)
-        _log(f"[Compare] Saved stacking figure: {fig_path}")
+        metrics_to_plot = (
+            _METRICS_MAIN if args.plot_metric == "all" else [args.plot_metric]
+        )
+        for m in metrics_to_plot:
+            if m not in df_stack.columns:
+                continue
+            fig_path = FIG / f"compare_stacking_{m}.png"
+            _plot_bar(df_stack, m, fig_path)
+            _log(f"[Compare] Saved stacking figure: {fig_path}")
 
-    # --------- SMOTE vs nosmote (stacking only) ---------
+    # --------- SMOTE vs nosmote (stacking only) + paired stats ---------
     handle_smote_effects(df_stack)
 
-    # --------- Base vs stacking (RF, GB, DT, NB, KNN vs stacking_lr_meta) ---------
+    # --------- Base vs meta-learner (RF, GB, DT, NB, KNN vs stacking_lr_meta) ---------
     _log("[Compare] Collecting base vs stacking …")
     df_bvs = collect_base_vs_stack(args.datasets, args.variants)
     if df_bvs.empty:
@@ -580,10 +706,15 @@ def main() -> None:
     _log(f"[Compare] Saved base vs stacking CSV: {base_csv}")
     _log(f"[Compare] Saved base vs stacking MD : {base_md}")
 
+    # --- Plot base vs stacking untuk setiap dataset & setiap metric utama ---
+    metrics_for_base = _METRICS_MAIN if args.base_metric == "all" else [args.base_metric]
     for ds in args.datasets:
-        fig_bvs = FIG / f"base_vs_stack_{ds}_{args.base_metric}.png"
-        _plot_base_vs_stack_per_dataset(df_bvs, ds, args.base_metric, fig_bvs)
-        _log(f"[Compare] Saved base-vs-stacking figure: {fig_bvs}")
+        for m in metrics_for_base:
+            if m not in df_bvs.columns:
+                continue
+            fig_bvs = FIG / f"base_vs_stack_{ds}_{m}.png"
+            _plot_base_vs_stack_per_dataset(df_bvs, ds, m, fig_bvs)
+            _log(f"[Compare] Saved base-vs-stacking figure: {fig_bvs}")
 
 
 if __name__ == "__main__":
