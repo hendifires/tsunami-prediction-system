@@ -172,18 +172,20 @@ def _build_tsunami_label(df: pd.DataFrame) -> Tuple[pd.Series, str, str]:
         label_series = pd.Series(label, index=df.index, name="label")
         return label_series, flag_col, cause_col
 
-    # -----------------------------
+        # -----------------------------
     # 2) Fallback: tsu + source_domain (desain events_fe)
     # -----------------------------
-    if "tsu" in df.columns and "source_domain" in df.columns:
-        _log("[Pre] Fallback label: menggunakan kolom 'tsu' + 'source_domain'.")
+    tsu_col = _find_column(df, ["tsu", "Tsu", "TSU"])
+    dom_col = _find_column(df, ["source_domain", "Source_Domain", "sourceDomain"])
 
-        tsu_col = "tsu"
-        cause_col = "source_domain"
+    if tsu_col is not None and dom_col is not None:
+        _log(
+            f"[Pre] Fallback label: menggunakan kolom '{tsu_col}' + '{dom_col}'."
+        )
 
         tsu_raw = df[tsu_col].fillna(0)
         tsu_bin = pd.to_numeric(tsu_raw, errors="coerce").fillna(0).astype(int)
-        dom = df[cause_col].astype(str).str.lower()
+        dom = df[dom_col].astype(str).str.lower()
 
         label = np.zeros(len(df), dtype=int)
         # tsunami tektonik
@@ -192,7 +194,7 @@ def _build_tsunami_label(df: pd.DataFrame) -> Tuple[pd.Series, str, str]:
         label[(tsu_bin == 1) & dom.str.contains("volc")] = 2
 
         label_series = pd.Series(label, index=df.index, name="label")
-        return label_series, tsu_col, cause_col
+        return label_series, tsu_col, dom_col
 
     # -----------------------------
     # 3) Jika dua-duanya tidak tersedia → error eksplisit
