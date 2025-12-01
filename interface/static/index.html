@@ -5,121 +5,231 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Tsunami Prediction</title>
   <style>
-    body { font-family: 'Segoe UI', Arial, sans-serif; background:#f4f8fb; margin:0; min-height:100vh; }
-    .container { background:#fff; max-width:500px; margin:40px auto 0; border-radius:16px;
-      box-shadow:0 4px 16px rgba(40,80,120,.12); padding:32px 28px 24px; }
-    h1 { text-align:center; color:#1a3a5d; margin-top:0; }
-    .tabs { text-align:center; margin-bottom:28px; }
-    .tab-btn { padding:9px 28px; margin-right:10px; border-radius:24px; border:none;
-      background:#e0eaf4; color:#1a3a5d; font-weight:600; cursor:pointer; font-size:1rem; }
-    .tab-btn.active { background:#2e72c5; color:#fff; }
-    form>div { margin-bottom:18px; }
-    label { display:block; margin-bottom:6px; font-weight:bold; color:#1a3a5d; }
-    input,select { width:100%; padding:8px 10px; border:1px solid #b6c5dd; border-radius:7px;
-      font-size:1rem; background:#fafdff; }
-    input:focus,select:focus { outline:none; border-color:#2e72c5; }
-    button[type="submit"] { width:100%; padding:12px; border-radius:10px;
-      background:linear-gradient(90deg,#2e72c5,#3db0b6); color:#fff; font-weight:bold; border:none; font-size:1.1rem; margin-top:10px; cursor:pointer; }
-    .hidden { display:none; }
-    #result { margin-top:28px; font-size:1.11rem; color:#244a65; padding:15px; background:#e6f3f8;
-      border-radius:7px; min-height:22px; text-align:center; border:1px solid #bee2f0; }
-    @media (max-width:600px){ .container{ padding:18px 7px 12px; max-width:98vw; } }
+    body {
+      font-family: 'Segoe UI', Arial, sans-serif;
+      background:#f4f8fb;
+      margin:0;
+      min-height:100vh;
+    }
+    .container {
+      background:#fff;
+      max-width:520px;
+      margin:40px auto 0;
+      border-radius:16px;
+      box-shadow:0 4px 16px rgba(40,80,120,.12);
+      padding:32px 28px 24px;
+    }
+    h1 {
+      text-align:center;
+      color:#1a3a5d;
+      margin-top:0;
+      margin-bottom:4px;
+    }
+    .subtitle {
+      text-align:center;
+      font-size:0.88rem;
+      color:#5c6f86;
+      margin:0 0 24px;
+      line-height:1.35;
+    }
+    .subtitle span.tag {
+      display:inline-block;
+      padding:2px 7px;
+      border-radius:999px;
+      background:#edf4ff;
+      border:1px solid #d1ddf5;
+      font-size:0.8rem;
+      margin:2px 3px;
+    }
+    form > div {
+      margin-bottom:16px;
+    }
+    label {
+      display:block;
+      margin-bottom:6px;
+      font-weight:600;
+      color:#1a3a5d;
+      font-size:0.95rem;
+    }
+    input {
+      width:100%;
+      padding:8px 10px;
+      border:1px solid #b6c5dd;
+      border-radius:7px;
+      font-size:1rem;
+      background:#fafdff;
+    }
+    input:focus {
+      outline:none;
+      border-color:#2e72c5;
+      box-shadow:0 0 0 1px rgba(46,114,197,.25);
+    }
+    button[type="submit"] {
+      width:100%;
+      padding:12px;
+      border-radius:10px;
+      background:linear-gradient(90deg,#2e72c5,#3db0b6);
+      color:#fff;
+      font-weight:bold;
+      border:none;
+      font-size:1.05rem;
+      margin-top:6px;
+      cursor:pointer;
+    }
+    button[type="submit"]:hover {
+      opacity:0.95;
+    }
+    #result {
+      margin-top:22px;
+      font-size:0.98rem;
+      color:#244a65;
+      padding:15px 14px;
+      background:#e6f3f8;
+      border-radius:7px;
+      min-height:22px;
+      border:1px solid #bee2f0;
+    }
+    #result b {
+      color:#17344b;
+    }
+    .probs {
+      margin-top:8px;
+      font-family: Consolas, Menlo, monospace;
+      font-size:0.9rem;
+      line-height:1.4;
+    }
+    .meta {
+      margin-top:8px;
+      font-size:0.85rem;
+      color:#556b82;
+    }
+    @media (max-width:600px) {
+      .container{
+        padding:20px 10px 14px;
+        max-width:98vw;
+      }
+    }
   </style>
 </head>
 <body>
   <div class="container">
     <h1>Tsunami Prediction</h1>
-    <div class="tabs">
-      <button id="btn-tec" class="tab-btn active" onclick="showForm('tec')">Tectonic Earthquake</button>
-      <button id="btn-vul" class="tab-btn" onclick="showForm('vul')">Volcanic Activity</button>
-    </div>
+    <p class="subtitle">
+      <span class="tag">Class 0: Non-tsunami</span>
+      <span class="tag">Class 1: Tsunami Tektonik</span>
+      <span class="tag">Class 2: Tsunami Vulkanik</span><br/>
+      Model: <b>Stacking Ensemble + SMOTE</b>
+      (artifact: <code>events_smote_stacking.joblib</code>)
+    </p>
 
-    <!-- Tectonic -->
-    <form id="form-tec">
-      <div><label for="mag">Magnitude (Mag):</label><input type="number" step="0.01" id="mag" required></div>
-      <div><label for="depth">Focal Depth (km):</label><input type="number" step="0.01" id="depth" required></div>
-      <div><label for="latitude_tec">Latitude:</label><input type="number" step="0.0001" id="latitude_tec" required></div>
-      <div><label for="longitude_tec">Longitude:</label><input type="number" step="0.0001" id="longitude_tec" required></div>
-      <div><label for="country_tec">Country:</label><select id="country_tec" required></select></div>
-      <div><label for="is_subduction_zone">Subduction Zone:</label>
-        <select id="is_subduction_zone" required><option value="">--Select--</option><option value="1">Yes</option><option value="0">No</option></select>
+    <form id="prediction-form">
+      <div>
+        <label for="mag">Magnitude (Mw):</label>
+        <input type="number" step="0.01" id="mag" required>
       </div>
-      <div><label for="distance_to_coast_km">Distance to Coast (km):</label><input type="number" step="0.01" id="distance_to_coast_km" required></div>
+      <div>
+        <label for="depth">Focal Depth (km):</label>
+        <input type="number" step="0.01" id="depth" required>
+      </div>
+      <div>
+        <label for="lat">Latitude (°):</label>
+        <input type="number" step="0.0001" id="lat" required>
+      </div>
+      <div>
+        <label for="lon">Longitude (°):</label>
+        <input type="number" step="0.0001" id="lon" required>
+      </div>
+      <div>
+        <label for="vei">VEI (0–8, gunakan 0 untuk non-vulkanik):</label>
+        <input type="number" step="1" min="0" max="8" id="vei" required>
+      </div>
+      <div>
+        <label for="elev">Elevation (m, 0 jika di laut):</label>
+        <input type="number" step="1" id="elev" required>
+      </div>
+
       <button type="submit">Predict</button>
     </form>
 
-    <!-- Volcanic -->
-    <form id="form-vul" class="hidden">
-      <div><label for="eq">Earthquake Magnitude (Eq):</label><input type="number" step="0.01" id="eq" required></div>
-      <div><label for="elevation">Elevation (m):</label><input type="number" step="1" id="elevation" required></div>
-      <div><label for="latitude_vul">Latitude:</label><input type="number" step="0.0001" id="latitude_vul" required></div>
-      <div><label for="longitude_vul">Longitude:</label><input type="number" step="0.0001" id="longitude_vul" required></div>
-      <div><label for="country_vul">Country:</label><select id="country_vul" required></select></div>
-      <div><label for="type">Volcano Type:</label>
-        <select id="type" required>
-          <option value="">--Select Type--</option>
-          <option>Caldera</option><option>Stratovolcano</option><option>Complex volcano</option>
-          <option>Shield volcano</option><option>Pyroclastic shield</option><option>Volcanic field</option>
-          <option>Lava dome</option><option>Subglacial volcano</option><option>Crater rows</option>
-          <option>Tuff cone</option><option>Fissure vent</option><option>Pyroclastic cone</option>
-          <option>Submarine volcano</option><option>Lava cone</option><option>Pumice cone</option>
-          <option>Mud volcano</option><option>Submarine volcanoes</option><option>Cinder cone</option>
-          <option>Compound volcano</option><option>Maar</option>
-        </select>
-      </div>
-      <div><label for="vei">VEI:</label><input type="number" step="1" id="vei" required></div>
-      <div><label for="distance_to_coast_km_vul">Distance to Coast (km):</label><input type="number" step="0.01" id="distance_to_coast_km_vul" required></div>
-      <div><label for="is_subduction_zone_vul">Subduction Zone:</label>
-        <select id="is_subduction_zone_vul" required><option value="">--Select--</option><option value="1">Yes</option><option value="0">No</option></select>
-      </div>
-      <button type="submit">Predict</button>
-    </form>
-
-    <div id="result"></div>
+    <div id="result">Silakan masukkan parameter kejadian, lalu tekan <b>Predict</b>.</div>
   </div>
 
   <script>
-    const countries = ["Afghanistan","Albania","Algeria","Andorra","Angola","Argentina","Armenia","Australia","Austria","Azerbaijan","Bahamas","Bahrain","Bangladesh","Barbados","Belarus","Belgium","Belize","Benin","Bhutan","Bolivia","Bosnia and Herzegovina","Botswana","Brazil","Brunei","Bulgaria","Burkina Faso","Burundi","Cambodia","Cameroon","Canada","Cape Verde","Central African Republic","Chad","Chile","China","Colombia","Comoros","Congo","Costa Rica","Croatia","Cuba","Cyprus","Czech Republic","Denmark","Djibouti","Dominica","Dominican Republic","Ecuador","Egypt","El Salvador","Equatorial Guinea","Eritrea","Estonia","Eswatini","Ethiopia","Fiji","Finland","France","Gabon","Gambia","Georgia","Germany","Ghana","Greece","Guatemala","Guinea","Guinea-Bissau","Guyana","Haiti","Honduras","Hungary","Iceland","India","Indonesia","Iran","Iraq","Ireland","Israel","Italy","Jamaica","Japan","Jordan","Kazakhstan","Kenya","Kiribati","Kuwait","Kyrgyzstan","Laos","Latvia","Lebanon","Lesotho","Liberia","Libya","Lithuania","Luxembourg","Madagascar","Malawi","Malaysia","Maldives","Mali","Malta","Marshall Islands","Mauritania","Mauritius","Mexico","Micronesia","Moldova","Monaco","Mongolia","Montenegro","Morocco","Mozambique","Myanmar","Namibia","Nepal","Netherlands","New Zealand","Nicaragua","Niger","Nigeria","North Korea","North Macedonia","Norway","Oman","Pakistan","Palau","Panama","Papua New Guinea","Paraguay","Peru","Philippines","Poland","Portugal","Qatar","Romania","Russia","Rwanda","Saint Kitts and Nevis","Saint Lucia","Saint Vincent and the Grenadines","Samoa","San Marino","Sao Tome and Principe","Saudi Arabia","Senegal","Serbia","Seychelles","Sierra Leone","Singapore","Slovakia","Slovenia","Solomon Islands","Somalia","South Africa","South Korea","South Sudan","Spain","Sri Lanka","Sudan","Suriname","Sweden","Switzerland","Syria","Tajikistan","Tanzania","Thailand","Togo","Tonga","Trinidad and Tobago","Tunisia","Turkey","Turkmenistan","Tuvalu","Uganda","Ukraine","United Arab Emirates","United Kingdom","United States","Uruguay","Uzbekistan","Vanuatu","Vatican City","Venezuela","Vietnam","Yemen","Zambia","Zimbabwe"];
-    function fillCountry(id){ const sel=document.getElementById(id); sel.innerHTML='<option value="">--Select Country--</option>'; countries.forEach(c=>{const o=document.createElement('option'); o.value=c; o.textContent=c; sel.appendChild(o);});}
-    fillCountry("country_tec"); fillCountry("country_vul");
-
-    function showForm(name){
-      document.getElementById("result").textContent="";
-      document.getElementById("btn-tec").classList.remove("active");
-      document.getElementById("btn-vul").classList.remove("active");
-      const tec=name==="tec"; document.getElementById("form-tec").classList.toggle("hidden",!tec);
-      document.getElementById("form-vul").classList.toggle("hidden",tec);
-      document.getElementById(tec?"btn-tec":"btn-vul").classList.add("active");
+    function mapClassLabel(c) {
+      if (c === 1) return "Tsunami Tektonik (class=1)";
+      if (c === 2) return "Tsunami Vulkanik (class=2)";
+      return "Non-tsunami (class=0)";
     }
 
-    document.getElementById("form-tec").addEventListener("submit", async (e)=>{
+    document.getElementById("prediction-form").addEventListener("submit", async (e) => {
       e.preventDefault();
-      const payload = { datas: [{
-        mag:+mag.value, depth:+depth.value, latitude:+latitude_tec.value, longitude:+longitude_tec.value,
-        country: country_tec.value, is_subduction_zone:+is_subduction_zone.value, distance_to_coast_km:+distance_to_coast_km.value
-      }]};
-      try{
-        const r = await fetch("/v1/predict/tectonic",{method:"POST", headers:{ "Content-Type":"application/json"}, body:JSON.stringify(payload)});
-        const j = await r.json();
-        result.innerHTML = j.predictions ? `<b>Prediction (Tectonic):</b> ${j.predictions[0]===1?"Tsunamigenic":"Non-Tsunamigenic"}<br><b>Probability:</b> ${(j.probabilities[0]*100).toFixed(1)} %` : `<span style="color:red;">Error: ${JSON.stringify(j)}</span>`;
-      }catch(err){ result.innerHTML = `<span style="color:red;">Error: ${err.message}</span>`; }
-    });
+      const resultDiv = document.getElementById("result");
+      resultDiv.innerHTML = "Predicting…";
 
-    document.getElementById("form-vul").addEventListener("submit", async (e)=>{
-      e.preventDefault();
-      const payload = { datas: [{
-        eq:+eq.value, elevation:+elevation.value, latitude:+latitude_vul.value, longitude:+longitude_vul.value,
-        country: country_vul.value, type: type.value, vei:+vei.value,
-        distance_to_coast_km:+distance_to_coast_km_vul.value, is_subduction_zone:+is_subduction_zone_vul.value
-      }]};
-      try{
-        const r = await fetch("/v1/predict/volcanic",{method:"POST", headers:{ "Content-Type":"application/json"}, body:JSON.stringify(payload)});
-        const j = await r.json();
-        result.innerHTML = j.predictions ? `<b>Prediction (Volcanic):</b> ${j.predictions[0]===1?"Tsunamigenic":"Non-Tsunamigenic"}<br><b>Probability:</b> ${(j.probabilities[0]*100).toFixed(1)} %` : `<span style="color:red;">Error: ${JSON.stringify(j)}</span>`;
-      }catch(err){ result.innerHTML = `<span style="color:red;">Error: ${err.message}</span>`; }
-    });
+      const payload = {
+        datas: [{
+          mag: +document.getElementById("mag").value,
+          depth: +document.getElementById("depth").value,
+          latitude: +document.getElementById("lat").value,
+          longitude: +document.getElementById("lon").value,
+          vei: +document.getElementById("vei").value,
+          elevation: +document.getElementById("elev").value
+        }]
+      };
 
-    showForm("tec");
+      try {
+        const r = await fetch("/predict", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payload)
+        });
+        const j = await r.json();
+        if (!r.ok) {
+          resultDiv.innerHTML =
+            `<span style="color:red;">Error: ${j.detail || JSON.stringify(j)}</span>`;
+          return;
+        }
+
+        if (!Array.isArray(j.predictions) || j.predictions.length === 0) {
+          resultDiv.innerHTML = `<span style="color:red;">Error: invalid response</span>`;
+          return;
+        }
+
+        const cls = j.predictions[0];
+        const probs = (j.probabilities && j.probabilities[0])
+          ? j.probabilities[0]
+          : null;
+
+        let html = `<b>Predicted Class:</b> ${mapClassLabel(cls)}<br/>`;
+
+        if (probs && probs.length === 3) {
+          html += `<div class="probs">
+P(Non-tsunami)      : ${(probs[0]*100).toFixed(1)}%<br/>
+P(Tsunami Tektonik) : ${(probs[1]*100).toFixed(1)}%<br/>
+P(Tsunami Vulkanik) : ${(probs[2]*100).toFixed(1)}%
+</div>`;
+        }
+
+        const thr = typeof j.threshold === "number" ? j.threshold.toFixed(3) : null;
+        const modelName = j.model_name || null;
+        const smoteVariant = j.smote_variant || null;
+        const artifact = j.artifact || null;
+
+        if (thr || modelName || smoteVariant || artifact) {
+          const parts = [];
+          if (modelName) parts.push(`model=${modelName}`);
+          if (smoteVariant) parts.push(`smote=${smoteVariant}`);
+          if (thr) parts.push(`thr=${thr}`);
+          if (artifact) parts.push(`artifact=${artifact}`);
+          html += `<div class="meta"><b>Model info:</b> ${parts.join(" | ")}</div>`;
+        }
+
+        resultDiv.innerHTML = html;
+      } catch (err) {
+        resultDiv.innerHTML =
+          `<span style="color:red;">Error: ${err.message}</span>`;
+      }
+    });
   </script>
 </body>
 </html>

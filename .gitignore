@@ -1,39 +1,36 @@
-# -------- Virtual environments --------
+# Environment
 .venv/
-env/
+.env
+*.env
 
-# -------- Python cache / build --------
+# Python cache
 __pycache__/
-*.pyc
-.ipynb_checkpoints/
-build/
-dist/
-*.egg-info/
+*.py[cod]
+*.pyo
+*.pyd
+*.so
 
-# -------- Editors / OS junk --------
-.vscode/
-.DS_Store
-Thumbs.db
-desktop.ini
-
-# -------- Logs --------
-*.log
-
-# -------- Models / Artifacts / Reports (generated) --------
-models/
+# Data & artifacts
+data/raw/
+data/processed/
+data/coastline/
 artifacts/
+experiments/runs/
+experiments/logs/
+
+# Notebooks metadata
+.ipynb_checkpoints/
+.notebooks/
+
+# Reports generated
 reports/figures/
 reports/tables/
 
-# -------- Data (generated or big) --------
-data/processed/
-# Jika data raw besar, sebaiknya juga di-ignore:
-# data/raw/
+# OS / editor
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
 
-# -------- Binary/weights --------
-*.pkl
-*.save
-*.h5
-*.dll
-*.pyd
-*.exe
+# Temporary
+running.txt

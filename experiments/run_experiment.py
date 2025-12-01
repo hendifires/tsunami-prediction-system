@@ -4,10 +4,10 @@ from __future__ import annotations
 """
 Runner serbaguna untuk eksperimen (berbasis configs.yaml):
 
-- PREPROC (preprocessing)
-    -> cleaning & split awal sesuai modul preprocessing
 - FE (feature_engineering)
-    -> tambah distance_to_coast_km (opsional) + OHE diagnostics
+    -> feature engineering ringan + events_fe.csv
+- PREPROC (preprocessing)
+    -> cleaning & split awal (events_train/test)
 - SMOTE (smote_pipeline)
     -> buat ulang split train/test + varian SMOTE
 - STACK (stacking_pipeline)
@@ -26,12 +26,13 @@ from typing import Dict, List, Any
 
 try:
     import yaml  # type: ignore
-except Exception as e:
+except Exception as e:  # pragma: no cover
     raise SystemExit(
         "PyYAML belum terpasang. Install dulu: pip install pyyaml"
     ) from e
 
-ROOT = Path(__file__).resolve().parents[1]  # repo root
+# File ini berada di folder experiments/, jadi root project = parent-nya
+ROOT = Path(__file__).resolve().parents[1]
 
 
 # ---------- Utilities ----------
@@ -63,21 +64,6 @@ def load_cfg(path: Path) -> Dict[str, Any]:
 
 
 # ---------- Command builders ----------
-def build_preproc_cmd(cfg: Dict[str, Any]) -> List[str]:
-    """
-    Bangun perintah untuk preprocessing.
-
-    Saat ini diasumsikan modul preprocessing bisa dijalankan
-    dengan default CLI: python -m tsunami_prediction.preprocessing
-    """
-    # Jika suatu saat butuh opsi tambahan, bisa diambil dari cfg["preproc"]
-    return [
-        sys.executable,
-        "-m",
-        "tsunami_prediction.preprocessing",
-    ]
-
-
 def build_fe_cmd(cfg: Dict[str, Any]) -> List[str]:
     """
     Bangun perintah untuk feature_engineering.
@@ -87,22 +73,39 @@ def build_fe_cmd(cfg: Dict[str, Any]) -> List[str]:
     fe:
       overwrite: true
       materialize_ohe: true
-
-    paths:
-      coastline: "data/coastline/ne_10m_coastline.shp"
     """
     fe = cfg.get("fe", {}) or {}
-    coast = (cfg.get("paths", {}) or {}).get("coastline") or fe.get("coastline")
     cmd = [
         sys.executable,
         "-m",
         "tsunami_prediction.feature_engineering",
-        "--overwrite" if _str_bool(fe.get("overwrite", True)) else "",
-        "--materialize-ohe" if _str_bool(fe.get("materialize_ohe", True)) else "",
     ]
-    cmd = [c for c in cmd if c]  # buang string kosong
-    if coast:
-        cmd += ["--coast", str(coast)]
+    if _str_bool(fe.get("overwrite", True)):
+        cmd.append("--overwrite")
+    if _str_bool(fe.get("materialize_ohe", True)):
+        cmd.append("--materialize-ohe")
+    return cmd
+
+
+def build_preproc_cmd(cfg: Dict[str, Any]) -> List[str]:
+    """
+    Bangun perintah untuk preprocessing.
+
+    Saat ini diasumsikan modul preprocessing bisa dijalankan
+    dengan default CLI: python -m tsunami_prediction.preprocessing
+    (input default: data/processed/events_fe.csv).
+    """
+    pre = cfg.get("preproc", {}) or {}
+    cmd = [
+        sys.executable,
+        "-m",
+        "tsunami_prediction.preprocessing",
+    ]
+    # Kalau suatu saat mau override year_min/test_size lewat YAML, bisa ditambah di sini.
+    if "year_min" in pre:
+        cmd += ["--year-min", str(pre["year_min"])]
+    if "test_size" in pre:
+        cmd += ["--test-size", str(pre["test_size"])]
     return cmd
 
 
@@ -120,9 +123,10 @@ def build_smote_cmd(cfg: Dict[str, Any]) -> List[str]:
         sys.executable,
         "-m",
         "tsunami_prediction.smote_pipeline",
-        "--overwrite" if _str_bool(sm.get("overwrite", True)) else "",
     ]
-    return [c for c in cmd if c]  # buang string kosong
+    if _str_bool(sm.get("overwrite", True)):
+        cmd.append("--overwrite")
+    return cmd
 
 
 def build_stack_cmds(
@@ -147,15 +151,10 @@ def build_stack_cmds(
     top_n = int(g("top_n", 30))
     feature_select = str(g("feature_select", "none")).lower()
 
-    # Tidak ada XGBoost lagi
     with_mlp = _str_bool(g("with_mlp", True))
-
-    # Default meta_grid = False (biar lebih ringan, bisa di-ON di configs.yaml)
     meta_grid = _str_bool(g("meta_grid", False))
-
     fast = _str_bool(g("fast", False))
     fast_n = int(g("fast_n", 5000))
-
     use_smote = str(g("use_smote", "auto")).lower()  # auto|yes|no
     ablation = _str_bool(g("ablation", False))
 
@@ -175,14 +174,11 @@ def build_stack_cmds(
         use_smote,
     ]
 
-    # meta-grid
     base_cmd += ["--meta-grid"] if meta_grid else ["--no-meta-grid"]
 
-    # MLP sebagai base learner
     if with_mlp:
         base_cmd += ["--with-mlp"]
 
-    # mode cepat
     if fast:
         base_cmd += ["--fast", "--fast-n", str(fast_n)]
 
@@ -201,7 +197,7 @@ def main() -> None:
     import argparse
 
     parser = argparse.ArgumentParser(
-        description="Runner eksperimen preprocessing + FE + SMOTE + stacking"
+        description="Runner eksperimen FE + preprocessing + SMOTE + stacking"
     )
     parser.add_argument(
         "--config",
@@ -219,21 +215,18 @@ def main() -> None:
     global_cfg = cfg.get("global", {}) or {}
     runs_cfg = cfg.get("runs", []) or []
 
-    # steps opsional (kalau tidak ada, semua dianggap True)
     steps = cfg.get("steps", {}) or {}
     do_pre = _str_bool(steps.get("preproc", True))
     do_fe = _str_bool(steps.get("fe", True))
     do_sm = _str_bool(steps.get("smote", True))
     do_st = _str_bool(steps.get("stack", True))
 
-    # seeds untuk random_state stacking
     seeds_cfg = cfg.get("seeds")
     if seeds_cfg:
         seeds = list(seeds_cfg)
     else:
         seeds = [int(global_cfg.get("random_state", 42))]
 
-    # kalau tidak ada runs didefinisikan, buat satu run default
     if not runs_cfg:
         runs_cfg = [
             {
@@ -246,19 +239,19 @@ def main() -> None:
 
     _log(f"[Runner] Mulai eksperimen (config={cfg_path}) …")
 
-    # 0) Preprocessing
-    if do_pre:
-        _log("[Runner] 0) Preprocessing")
-        run_cmd(build_preproc_cmd(cfg))
-    else:
-        _log("[Runner] 0) Preprocessing — dilewati")
-
-    # 1) Feature Engineering
+    # 0) Feature Engineering (harus duluan supaya events_fe.csv ada)
     if do_fe:
-        _log("[Runner] 1) Feature Engineering")
+        _log("[Runner] 0) Feature Engineering")
         run_cmd(build_fe_cmd(cfg))
     else:
-        _log("[Runner] 1) Feature Engineering — dilewati")
+        _log("[Runner] 0) Feature Engineering — dilewati")
+
+    # 1) Preprocessing (multiclass events)
+    if do_pre:
+        _log("[Runner] 1) Preprocessing (events)")
+        run_cmd(build_preproc_cmd(cfg))
+    else:
+        _log("[Runner] 1) Preprocessing — dilewati")
 
     # 2) SMOTE pipeline
     if do_sm:

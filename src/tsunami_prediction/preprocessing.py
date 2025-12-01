@@ -1,1198 +1,551 @@
 from __future__ import annotations
+# cSpell:ignore tsunami tectonic volcanic
+
+"""
+Preprocessing pipeline untuk dataset gabungan tsunami (multiclass 0/1/2).
+
+Tugas utama:
+- Membaca dataset gabungan (default: data/processed/events_fe.csv).
+- Filter tahun (>= 1900).
+- Membuat label multi-class `label`:
+      0 = non-tsunami
+      1 = tsunami tektonik
+      2 = tsunami vulkanik
+  menggunakan:
+      (a) jika tersedia: kombinasi kolom tsunami_flag & cause, atau
+      (b) fallback: kombinasi `tsu` + `source_domain` (tectonic / volcanic).
+- Memilih fitur fisik yang sederhana dan umum di literatur:
+      * magnitude / mag
+      * depth
+      * latitude, longitude
+      * VEI
+      * elevation
+      * alert (kategorikal → OHE)
+      * sig (significance)
+- Cleaning & imputasi:
+      * ganti inf/-inf → NaN
+      * imputasi median untuk numerik
+      * imputasi modus + OHE untuk kategorikal
+      * drop fitur zero-variance
+- Split train/test (stratified 0/1/2).
+- Menyimpan:
+      * data/processed/events_train.csv
+      * data/processed/events_test.csv
+
+Catatan:
+- SMOTE TIDAK dilakukan di sini (lihat smote_pipeline.py).
+- Scaling SVM dilakukan di dalam model (pipeline di stacking_pipeline.py),
+  bukan di level dataset global.
+"""
 
 import argparse
 from pathlib import Path
-from typing import Dict, List, Tuple
+from typing import List, Tuple, Dict, Optional
 
 import numpy as np
 import pandas as pd
+
 from joblib import dump
-from sklearn.compose import ColumnTransformer
-from sklearn.pipeline import Pipeline
-from sklearn.preprocessing import OneHotEncoder, StandardScaler
-from sklearn.impute import SimpleImputer
 from sklearn.model_selection import train_test_split
+from sklearn.preprocessing import OneHotEncoder
+from sklearn.impute import SimpleImputer
+from sklearn.feature_selection import VarianceThreshold
 
-
-# ================== PATHS ==================
-ROOT = Path(__file__).resolve().parents[2]  # .../tsunami-prediction
+# ---------------- PATHS ----------------
+ROOT = Path(__file__).resolve().parents[2]
 DATA = ROOT / "data"
-RAW = DATA / "raw"
 PROCESSED = DATA / "processed"
-
 REPORTS = ROOT / "reports"
 TAB = REPORTS / "tables"
+FIG = REPORTS / "figures"
+ART = ROOT / "artifacts"
 
-ART = ROOT / "artifacts"  # encoder, scaler, daftar fitur
-
-# file CSV untuk daftar event ambigu yang mau di-drop manual
-# format: dataset,id  (dataset = "tectonic" atau "volcanic")
-MANUAL_EXCLUDE = DATA / "manual_exclude.csv"
-
-for p in (PROCESSED, TAB, ART):
+for p in (PROCESSED, TAB, FIG, ART):
     p.mkdir(parents=True, exist_ok=True)
 
 
-# ================== I/O HELPERS ==================
-def _read_csv_guess(path: Path) -> pd.DataFrame:
-    """Baca CSV dengan autodetect delimiter. (engine='python' tidak boleh pakai low_memory)."""
-    return pd.read_csv(path, sep=None, engine="python")
+# --------- Helper untuk OHE (kompatibel sklearn lama/baru) ---------
+def _one_hot_encoder() -> OneHotEncoder:
+    """OneHotEncoder yang aman untuk berbagai versi scikit-learn."""
+    try:
+        return OneHotEncoder(handle_unknown="ignore", sparse_output=False)
+    except TypeError:  # versi lama
+        return OneHotEncoder(handle_unknown="ignore", sparse=False)
 
 
-def _save_info_tables(df: pd.DataFrame, name: str) -> None:
-    """Simpan dtypes & missing summary ke reports/tables."""
-    dtypes = pd.DataFrame(
-        {"column": df.columns, "dtype": [str(df[c].dtype) for c in df.columns]}
-    )
-    dtypes.to_csv(TAB / f"{name}_dtypes.csv", index=False)
-
-    miss = df.isna().sum().rename("missing")
-    missp = (df.isna().mean() * 100).round(2).rename("missing_percent")
-    (
-        pd.concat([miss, missp], axis=1)
-        .reset_index()
-        .rename(columns={"index": "column"})
-        .to_csv(TAB / f"{name}_missing.csv", index=False)
-    )
+# ---------- Logging & util kecil ----------
+def _log(msg: str) -> None:
+    print(msg, flush=True)
 
 
-def _save_shape_summary(rows_cols: List[Tuple[str, int, int]]) -> None:
-    pd.DataFrame(rows_cols, columns=["dataset", "rows", "cols"]).to_csv(
-        TAB / "processed_shapes.csv", index=False
-    )
+def _read_csv(p: Path) -> pd.DataFrame:
+    return pd.read_csv(p)
 
 
-def _save_schema_and_samples(df: pd.DataFrame, dataset: str) -> None:
+def _savetab(df: pd.DataFrame, path: Path) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    df.to_csv(path, index=False)
+
+
+def _replace_non_finite(df: pd.DataFrame) -> pd.DataFrame:
+    """Ganti inf/-inf dengan NaN (imputasi dilakukan terpisah)."""
+    return df.replace([np.inf, -np.inf], np.nan)
+
+
+# ---------- Deteksi nama kolom fleksibel ----------
+def _find_column(df: pd.DataFrame, candidates: List[str]) -> Optional[str]:
     """
-    Simpan:
-    - Schema clean (Kolom, Tipe data, Contoh) -> untuk Tabel 6 & 7 di tesis.
-    - Sample baris nyata -> contoh data real di lampiran / ilustrasi.
+    Cari kolom pertama yang muncul dari daftar kandidat.
+    Return None kalau tidak ada.
     """
-    rows: List[Dict[str, object]] = []
-    for col in df.columns:
-        series = df[col]
-        dtype = str(series.dtype)
-        non_na = series.dropna()
-        example = "" if non_na.empty else non_na.iloc[0]
-        rows.append({"Kolom": col, "Tipe data": dtype, "Contoh": example})
-
-    schema_df = pd.DataFrame(rows)
-    schema_df.to_csv(TAB / f"{dataset}_schema_clean.csv", index=False)
-
-    # contoh beberapa baris data real
-    df.head(20).to_csv(TAB / f"{dataset}_sample_clean.csv", index=False)
+    for c in candidates:
+        if c in df.columns:
+            return c
+    return None
 
 
-# ================== CLEANING & STANDARDIZATION ==================
-def _standardize_columns(
-    df: pd.DataFrame, col_map: Dict[str, str] | None = None
-) -> pd.DataFrame:
-    """Normalkan nama kolom dan terapkan peta rename yang diperlukan."""
-    df = df.copy()
-    df.columns = (
-        df.columns.astype(str)
-        .str.strip()
-        .str.replace("\ufeff", "", regex=True)
-        .str.lower()
-        .str.replace(" ", "_")
-    )
-    if col_map:
-        df = df.rename(columns=col_map)
-    # singkirkan kolom duplikat (bisa muncul setelah normalisasi nama)
-    df = df.loc[:, ~df.columns.duplicated()].copy()
-    return df
+# ---------- Labeling 0/1/2 ----------
+def _build_tsunami_label(df: pd.DataFrame) -> Tuple[pd.Series, str, str]:
+    """
+    Bangun label multi-class 0/1/2 untuk prediksi tsunami.
 
+    Skema utama (jika kolom tersedia eksplisit):
+      - gunakan kombinasi:
+            tsunami_flag ∈ {0/1, yes/no, dsb.}
+            cause        ∈ {earthquake, volcanic eruption, ...}
 
-def _clean_whitespace(df: pd.DataFrame) -> pd.DataFrame:
-    """Trim whitespace & normalisasi string NaN."""
-    df = df.copy()
-    for c in df.select_dtypes(include="object").columns:
-        df[c] = df[c].astype(str).str.strip()
-        df[c] = df[c].replace(
-            {"nan": np.nan, "none": np.nan, "None": np.nan, "NONE": np.nan, "": np.nan}
+        Aturan:
+          * tsunami_flag = False/0                 -> 0 (non-tsunami)
+          * tsunami_flag = True & cause ~ earthquake   -> 1 (tsunami tektonik)
+          * tsunami_flag = True & cause ~ volcanic     -> 2 (tsunami vulkanik)
+          * lainnya                                     -> 0
+
+    Fallback (jika tidak ada tsunami_flag/cause):
+      - gunakan kombinasi:
+            tsu            : flag tsunami 0/1 dari sumber resmi (NOAA/GVP)
+            source_domain  : 'tectonic' / 'volcanic' (asal event)
+
+        Aturan:
+          * tsu == 0                                  -> 0
+          * tsu == 1 & source_domain ~ 'tect'         -> 1
+          * tsu == 1 & source_domain ~ 'volc'         -> 2
+          * selain itu                                 -> 0
+    """
+
+    # -----------------------------
+    # 1) Coba pakai tsunami_flag + cause (jika ada)
+    # -----------------------------
+    tsunami_flag_candidates = ["tsunami_flag", "tsunami", "tsu_flag", "Tsu"]
+    cause_candidates = ["cause", "cause_name", "origin", "source", "trigger"]
+
+    flag_col = _find_column(df, tsunami_flag_candidates)
+    cause_col = _find_column(df, cause_candidates)
+
+    if flag_col is not None and cause_col is not None:
+        _log(f"[Pre] Menggunakan kolom tsunami_flag='{flag_col}', cause='{cause_col}'.")
+
+        flag_raw = df[flag_col]
+        cause_raw = df[cause_col]
+
+        flag_norm = flag_raw.astype(str).str.lower().str.strip()
+        cause_norm = cause_raw.astype(str).str.lower().str.strip()
+
+        yes_values = {"1", "y", "yes", "true", "tsunami", "t"}
+        flag_yes = flag_norm.isin(yes_values) | (
+            pd.to_numeric(flag_norm, errors="coerce") > 0
         )
-    return df
 
+        quake_terms = {"earthquake", "eq", "tectonic", "seismic", "quake"}
+        volc_terms = {"volcano", "volcanic", "eruption", "volcanic eruption"}
 
-def _to_numeric(df: pd.DataFrame, cols: List[str]) -> pd.DataFrame:
-    """Paksa kolom jadi numerik (errors->NaN)."""
-    df = df.copy()
-    for c in cols:
-        if c in df.columns:
-            df[c] = pd.to_numeric(df[c], errors="coerce")
-    return df
-
-
-def _normalize_calendar(df: pd.DataFrame) -> pd.DataFrame:
-    """
-    Validasi kalender:
-    - month di luar 1..12 -> NaN
-    - day di luar 1..31 -> NaN
-    - year boleh negatif (contoh: -4360) tapi dibatasi kisaran wajar [-5000, 2100]
-    - jam:   0..23; menit & detik: 0..59
-    """
-    df = df.copy()
-    if "year" in df.columns:
-        df.loc[~df["year"].between(-5000, 2100), "year"] = np.nan
-    if "month" in df.columns:
-        df.loc[~df["month"].between(1, 12), "month"] = np.nan
-    if "day" in df.columns:
-        df.loc[~df["day"].between(1, 31), "day"] = np.nan
-    if "hr" in df.columns:
-        df.loc[~df["hr"].between(0, 23), "hr"] = np.nan
-    if "mn" in df.columns:
-        df.loc[~df["mn"].between(0, 59), "mn"] = np.nan
-    if "sec" in df.columns:
-        df.loc[~df["sec"].between(0, 59), "sec"] = np.nan
-    return df
-
-
-def _map_tsu_binary(df: pd.DataFrame) -> pd.DataFrame:
-    """
-    Pastikan kolom target 'tsu' biner 0/1.
-    - Jika angka: >0 -> 1, else 0
-    - Jika string: yes/true/y/t/1 -> 1
-    - Jika kolom target tidak ada, buat tsu=0 (agar pipeline tetap jalan)
-    """
-    df = df.copy()
-    candidates = [
-        "tsu",
-        "tsunami",
-        "tsu_flag",
-        "tsunami_flag",
-        "is_tsunami",
-        "tsunami_event",
-        "tsunami_(0/1)",
-        "tsunami_(y/n)",
-    ]
-    target_col = next((c for c in candidates if c in df.columns), None)
-
-    if target_col is None:
-        df["tsu"] = 0
-        return df
-
-    s = df[target_col]
-    if s.dtype == "O":
-        s2 = s.astype(str).str.lower().str.strip()
-        df["tsu"] = s2.isin({"1", "y", "yes", "true", "tsunami", "t"}).astype(int)
-    else:
-        df["tsu"] = pd.to_numeric(s, errors="coerce").fillna(0)
-        df["tsu"] = (df["tsu"] > 0).astype(int)
-
-    if target_col != "tsu":
-        df = df.drop(columns=[target_col])
-    return df
-
-
-def _drop_out_of_bounds(df: pd.DataFrame) -> pd.DataFrame:
-    """Filter nilai koordinat/fisik ekstrem yang tidak masuk akal."""
-    df = df.copy()
-    if "latitude" in df.columns:
-        df = df[(df["latitude"] >= -90) & (df["latitude"] <= 90)]
-    if "longitude" in df.columns:
-        df = df[(df["longitude"] >= -180) & (df["longitude"] <= 180)]
-    if "depth" in df.columns:
-        df.loc[df["depth"] < 0, "depth"] = np.nan
-        df.loc[df["depth"] > 700, "depth"] = np.nan
-    if "mag" in df.columns:
-        df.loc[(df["mag"] < 0) | (df["mag"] > 10), "mag"] = np.nan
-    if "vei" in df.columns:
-        df.loc[(df["vei"] < 0) | (df["vei"] > 8), "vei"] = np.nan
-    if "elevation" in df.columns:
-        df.loc[df["elevation"] < -500, "elevation"] = np.nan
-    return df
-
-
-# ---------- manual exclude (hapus tsunami ambigu secara manual) ----------
-def _load_manual_exclude(path: Path) -> Dict[str, List[float]]:
-    """
-    Baca daftar event yang mau di-drop manual.
-    Format expected (CSV):
-        dataset,id
-        tectonic,1234
-        tectonic,5678
-        volcanic,42
-    """
-    if not path.exists():
-        return {}
-
-    df = pd.read_csv(path)
-    if "dataset" not in df.columns or "id" not in df.columns:
-        print(
-            "[WARN] manual_exclude.csv ditemukan tapi tidak punya kolom 'dataset' & 'id'. Diabaikan."
+        cause_quake = cause_norm.apply(
+            lambda s: any(t in s for t in quake_terms) if isinstance(s, str) else False
         )
-        return {}
-
-    df["dataset"] = df["dataset"].astype(str).str.strip().str.lower()
-    df["id"] = pd.to_numeric(df["id"], errors="coerce")
-
-    excl: Dict[str, List[float]] = {}
-    for ds, group in df.groupby("dataset"):
-        if ids := group["id"].dropna().unique().tolist():
-            excl[ds] = ids
-            print(f"[Preproc] manual exclude: dataset={ds}, num_ids={len(ids)}")
-    return excl
-
-
-def _apply_manual_exclude(
-    df: pd.DataFrame,
-    dataset: str,
-    exclude_map: Dict[str, List[float]],
-) -> pd.DataFrame:
-    """Drop baris dengan id tertentu sesuai manual_exclude.csv."""
-    ds_key = dataset.lower()
-    if ds_key not in exclude_map:
-        return df
-
-    if "id" not in df.columns:
-        print(f"[Preproc] manual exclude untuk {dataset} di-skip (kolom 'id' tidak ada).")
-        return df
-
-    ids = exclude_map[ds_key]
-    before = len(df)
-    out = df[~df["id"].isin(ids)].copy()
-    removed = before - len(out)
-    print(f"[Preproc] {dataset}: manual exclude {removed} baris (dari {before}).")
-    return out
-
-
-# ---------- Kanamori Level A filter ----------
-def _apply_kanamori_levelA(
-    df: pd.DataFrame,
-    min_mag: float = 7.0,
-    max_depth: float = 70.0,
-) -> pd.DataFrame:
-    """
-    Terapkan kriteria Kanamori untuk gempa tektonik (Level A):
-        magnitude >= min_mag
-        depth <= max_depth (km)
-
-    Filter diterapkan ke SELURUH dataset tektonik (baik tsu=0 maupun tsu=1),
-    sehingga model fokus pada gempa besar dan dangkal.
-    """
-    if "mag" not in df.columns or "depth" not in df.columns:
-        print("[Preproc] Kanamori Level A tidak diterapkan (mag/depth tidak ada).")
-        return df
-
-    before = len(df)
-    mask = (df["mag"] >= min_mag) & (df["depth"] <= max_depth)
-    out = df.loc[mask].reset_index(drop=True)
-    after = len(out)
-
-    if after == 0:
-        print(
-            "[Preproc] WARNING: Kanamori filter menghasilkan 0 baris. "
-            "Cek kembali nilai min_mag / max_depth."
+        cause_volc = cause_norm.apply(
+            lambda s: any(t in s for t in volc_terms) if isinstance(s, str) else False
         )
-        return df
 
-    # ringkasan distribusi tsu
-    if "tsu" in out.columns:
-        dist = out["tsu"].value_counts(dropna=False).to_dict()
-    else:
-        dist = {}
-    print(
-        f"[Preproc] Kanamori Level A: {before} -> {after} baris "
-        f"(mag>={min_mag}, depth<={max_depth}). Distribusi tsu: {dist}"
+        label = np.zeros(len(df), dtype=int)
+        label[flag_yes & cause_quake] = 1
+        label[flag_yes & cause_volc] = 2
+
+        label_series = pd.Series(label, index=df.index, name="label")
+        return label_series, flag_col, cause_col
+
+    # -----------------------------
+    # 2) Fallback: tsu + source_domain (desain events_fe)
+    # -----------------------------
+    if "tsu" in df.columns and "source_domain" in df.columns:
+        _log("[Pre] Fallback label: menggunakan kolom 'tsu' + 'source_domain'.")
+
+        tsu_col = "tsu"
+        cause_col = "source_domain"
+
+        tsu_raw = df[tsu_col].fillna(0)
+        tsu_bin = pd.to_numeric(tsu_raw, errors="coerce").fillna(0).astype(int)
+        dom = df[cause_col].astype(str).str.lower()
+
+        label = np.zeros(len(df), dtype=int)
+        # tsunami tektonik
+        label[(tsu_bin == 1) & dom.str.contains("tect")] = 1
+        # tsunami vulkanik
+        label[(tsu_bin == 1) & dom.str.contains("volc")] = 2
+
+        label_series = pd.Series(label, index=df.index, name="label")
+        return label_series, tsu_col, cause_col
+
+    # -----------------------------
+    # 3) Jika dua-duanya tidak tersedia → error eksplisit
+    # -----------------------------
+    raise KeyError(
+        "Kolom tsunami_flag/cause maupun fallback (tsu + source_domain) tidak ditemukan.\n"
+        f"  Kolom tersedia: {list(df.columns)}"
     )
-    return out
 
 
-# ---------- otomatis: deteksi & buang tsunami ambigu ----------
-def _drop_tectonic_ambiguous_tsu(
+# ---------- Seleksi fitur ----------
+
+# Fitur yang ingin dipakai (kandidat nama kolom yang lazim muncul)
+FEATURE_CANDIDATES: List[str] = [
+    # --- fitur utama tektonik ---
+    "magnitude", "mag", "magMw", "mag_ml",
+    "depth", "depth_km", "focal_depth",
+    # transformasi dasar (kalau sudah dibuat di FE)
+    "depth_log1p", "mag_sq",
+
+    # --- koordinat & posisi ---
+    "latitude", "lat",
+    "longitude", "lon",
+    "abs_lat",          # |latitude|
+    "is_tropic",        # boolean zona tropis
+    "lat_lon_prod",     # kombinasi posisi
+
+    # --- fitur utama vulkanik ---
+    "vei", "VEI",
+    "elevation", "elev", "elevation_m",
+
+    # --- kombinasi & transformasi vulkanik (kalau ada) ---
+    "elev_log1p", "vei_sq",
+
+    # --- fitur jarak ke pantai (butuh FE dengan --coast) ---
+    "distance_to_coast_km",
+    "dist_coast_log1p",
+    "near_coast_50km",
+    "near_coast_100km",
+
+    # --- zona subduksi ---
+    "is_subduction_zone",
+
+    # --- fitur tambahan dari katalog jika tersedia ---
+    "alert",
+    "sig",
+]
+
+# Kolom yang jelas bukan fitur model
+NON_FEATURE_CANDIDATES: List[str] = [
+    "tsunami_flag", "tsu_flag", "tsunami",
+    "cause", "source_cause",
+    "tsu", "source_domain",      # dari events_fe
+    "label", "tsunami_label",
+    "year", "Year",
+    "event_id", "id",
+]
+
+
+
+def _select_feature_columns(
     df: pd.DataFrame,
-    min_mag: float = 7.0,
-    max_depth: float = 70.0,
-) -> pd.DataFrame:
+    target_col: str,
+) -> Tuple[pd.DataFrame, List[str], List[str]]:
     """
-    Identifikasi & buang event tsunami TEKTONIK yang ambigu:
-      - tsu == 1
-      - DAN (mag < min_mag ATAU depth > max_depth)
-    Event-event ini akan disimpan ke CSV terpisah:
-      reports/tables/tectonic_ambiguous_tsu.csv
+    Pilih subset fitur yang relevan untuk model:
+
+    - Langkah utama:
+        * Ambil semua kolom yang cocok dengan FEATURE_CANDIDATES.
+    - Jika hasilnya kosong/terlalu sedikit (misal dataset lain):
+        * Fallback ke semua kolom numerik, kecuali target & NON_FEATURE_CANDIDATES.
+
+    Return:
+        X_features : DataFrame fitur
+        num_cols   : daftar kolom numerik
+        cat_cols   : daftar kolom kategorikal
     """
-    if not {"tsu", "mag", "depth"}.issubset(df.columns):
-        print("[Preproc] Ambiguous-tsu: kolom tsu/mag/depth tidak lengkap, skip.")
-        return df
-
-    df = df.copy()
-
-    # hanya event dengan mag & depth terisi yang kita nilai
-    cond_valid = df["mag"].notna() & df["depth"].notna()
-    cond_tsu = df["tsu"] == 1
-    cond_amb = cond_valid & cond_tsu & (
-        (df["mag"] < min_mag) | (df["depth"] > max_depth)
-    )
-
-    ambiguous = df.loc[cond_amb].copy()
-    if ambiguous.empty:
-        print("[Preproc] Ambiguous-tsu: tidak ada event yang melanggar kriteria Kanamori.")
-        return df
-
-    # simpan ke CSV untuk dokumentasi di tesis
-    out_path = TAB / "tectonic_ambiguous_tsu.csv"
-    ambiguous.to_csv(out_path, index=False)
-
-    before = len(df)
-    df_clean = df.loc[~cond_amb].copy()
-    removed = before - len(df_clean)
-
-    print(
-        f"[Preproc] Ambiguous-tsu: {removed} baris (tsu=1 & mag<{min_mag} "
-        f"atau depth>{max_depth}) dipindahkan ke {out_path.name}."
-    )
-    return df_clean
-
-
-# ---------- dedup utility ----------
-def _drop_and_log(
-    df: pd.DataFrame,
-    subset,
-    dataset: str,
-    label: str,
-) -> pd.DataFrame:
-    """Drop duplicates on subset and print delta."""
-    before = len(df)
-    df2 = df.drop_duplicates(subset=subset) if subset else df.drop_duplicates()
-    after = len(df2)
-    if after != before:
-        print(f"[{dataset}] drop_duplicates {label}: {before} -> {after}")
-    return df2
-
-
-def _drop_duplicates_smart(df: pd.DataFrame, dataset: str) -> pd.DataFrame:
-    """
-    Strategi deduplikasi yang stabil:
-    1) Jika ada 'id' -> pakai 'id'
-    2) Kalau tidak ada, gunakan kombinasi kunci yang tersedia dari prioritas berikut
-       (ambil yang ada saja; minimal 3 kolom agar kunci cukup ketat):
-       year, month, day, hr, mn, sec, latitude, longitude, name, location, country
-    """
-    df = df.copy()
-    if "id" in df.columns:
-        return _drop_and_log(df, ["id"], dataset, "by 'id'")
-
-    priority = [
-        "year",
-        "month",
-        "day",
-        "hr",
-        "mn",
-        "sec",
-        "latitude",
-        "longitude",
-        "name",
-        "location",
-        "country",
-    ]
-    keys = [c for c in priority if c in df.columns]
-    if len(keys) >= 3:
-        return _drop_and_log(df, keys, dataset, f"by {keys}")
-    return _drop_and_log(df, None, dataset, "on all columns")
-
-
-# ---------- time-erupt parser (volcanic) ----------
-def _extract_time_cols(df: pd.DataFrame, time_col: str = "time_erupt") -> pd.DataFrame:
-    """
-    Parse kolom waktu letusan (mis. 'time_erupt') menjadi hr, mn, sec bila memungkinkan.
-    Format yang ditangani:
-      - 'HH:MM', 'HH:MM:SS'
-      - 'HHMM' atau 'HHMMSS'
-    Jika format tidak cocok -> diisi NaN.
-    """
-    if time_col not in df.columns:
-        return df
-
-    def _split_one(val: object) -> tuple[float, float, float]:
-        if pd.isna(val):
-            return (np.nan, np.nan, np.nan)
-        txt = str(val).strip().lower()
-        if not txt or txt in {"nan", "none"}:
-            return (np.nan, np.nan, np.nan)
-
-        txt = txt.replace(".", ":").replace("-", ":")
-        if ":" in txt:
-            parts = [p for p in txt.split(":") if p]
-        else:
-            digits = "".join(ch for ch in txt if ch.isdigit())
-            if len(digits) == 4:
-                parts = [digits[:2], digits[2:4]]
-            elif len(digits) == 6:
-                parts = [digits[:2], digits[2:4], digits[4:6]]
-            else:
-                return (np.nan, np.nan, np.nan)
-
-        def _to_int(s: str) -> float:
-            try:
-                return float(int(s))
-            except Exception:
-                return float("nan")
-
-        h = _to_int(parts[0]) if len(parts) >= 1 else np.nan
-        m = _to_int(parts[1]) if len(parts) >= 2 else np.nan
-        s_val = _to_int(parts[2]) if len(parts) >= 3 else np.nan
-        return (h, m, s_val)
-
-    tuples = df[time_col].apply(_split_one)
-    hr = tuples.apply(lambda t: t[0])
-    mn = tuples.apply(lambda t: t[1])
-    sec = tuples.apply(lambda t: t[2])
-
-    out = df.copy()
-    out["hr"] = pd.to_numeric(hr, errors="coerce")
-    out["mn"] = pd.to_numeric(mn, errors="coerce")
-    out["sec"] = pd.to_numeric(sec, errors="coerce")
-    return out
-
-
-# ================== DATASET-SPECIFIC PREP ==================
-def prepare_tectonic(df: pd.DataFrame) -> pd.DataFrame:
-    """
-    Cleaning domain tektonik.
-    Target akhir kolom & tipe data (Tabel 6):
-    - id          : float64
-    - year        : float64
-    - month       : float64
-    - day         : float64
-    - hr          : float64
-    - mn          : float64
-    - sec         : float64
-    - country     : object
-    - area        : object
-    - region      : float64
-    - location    : object
-    - latitude    : float64
-    - longitude   : float64
-    - depth       : float64
-    - mag         : float64
-    - mmi_int     : float64
-    - tsu         : int64
-    """
-    # mapping khusus dari spesifikasi kolom raw
-    df = _standardize_columns(
-        df,
-        col_map={
-            "focal_depth_(km)": "depth",
-            "location_name": "location",
-        },
-    )
-    df = _clean_whitespace(df)
-    df = _map_tsu_binary(df)
-
-    # ke numerik (termasuk 'id' & 'region' agar sesuai spesifikasi)
-    df = _to_numeric(
-        df,
-        [
-            "id",
-            "year",
-            "mo",
-            "dy",
-            "hr",
-            "mn",
-            "sec",
-            "latitude",
-            "longitude",
-            "depth",
-            "mag",
-            "mw",
-            "ms",
-            "mb",
-            "ml",
-            "region",
-            "mmi_int",
-        ],
-    )
-
-    # Mo/Dy -> month/day
-    df = df.rename(columns={"mo": "month", "dy": "day"})
-
-    df = _normalize_calendar(df)
-    df = _drop_out_of_bounds(df)
-
-    wanted = [
-        "id",
-        "year",
-        "month",
-        "day",
-        "hr",
-        "mn",
-        "sec",
-        "country",
-        "area",
-        "region",
-        "location",
-        "latitude",
-        "longitude",
-        "depth",
-        "mag",
-        "mmi_int",
-        "tsu",
-    ]
-    existing = [c for c in wanted if c in df.columns]
-    df = df[existing].copy()
-
-    # wajib ada koordinat + tahun; bulan/hari boleh kosong untuk data historis
-    must_have = [c for c in ("latitude", "longitude", "year", "tsu") if c in df.columns]
-    df = df.dropna(subset=must_have)
-
-    # deduplikasi pintar
-    df = _drop_duplicates_smart(df, dataset="tectonic")
-
-    # pastikan kolom unik & index rapi
-    df = df.loc[:, ~df.columns.duplicated()].reset_index(drop=True)
-
-    # ====== ENFORCE TIPE DATA SESUAI TABEL 6 ======
-    num_cols_float = [
-        "id",
-        "year",
-        "month",
-        "day",
-        "hr",
-        "mn",
-        "sec",
-        "latitude",
-        "longitude",
-        "depth",
-        "mag",
-        "mmi_int",
-        "region",
-    ]
-    for c in num_cols_float:
-        if c in df.columns:
-            df[c] = pd.to_numeric(df[c], errors="coerce").astype("float64")
-
-    for c in ["country", "area", "location"]:
-        if c in df.columns:
-            df[c] = df[c].astype("object")
-
-    if "tsu" in df.columns:
-        df["tsu"] = df["tsu"].astype("int64")
-
-    return df
-
-
-def prepare_volcanic(df: pd.DataFrame) -> pd.DataFrame:
-    """
-    Cleaning domain vulkanik.
-    Target akhir kolom & tipe data (Tabel 7):
-    - id          : float64
-    - year        : float64
-    - month       : float64
-    - day         : float64
-    - name        : object
-    - location    : object
-    - country     : object
-    - latitude    : float64
-    - longitude   : float64
-    - elevation   : float64
-    - type        : object
-    - status      : object
-    - vei         : float64
-    - eq          : float64
-    - agent       : object
-    - tsu         : int64
-    """
-    df = _standardize_columns(
-        df,
-        col_map={
-            "elevation_(m)": "elevation",
-            "time_erupt": "time_erupt",
-        },
-    )
-    df = _clean_whitespace(df)
-    df = _map_tsu_binary(df)
-    df = _extract_time_cols(df, time_col="time_erupt")
-
-    df = _to_numeric(
-        df,
-        [
-            "id",
-            "year",
-            "mo",
-            "dy",
-            "hr",
-            "mn",
-            "sec",
-            "latitude",
-            "longitude",
-            "elevation",
-            "vei",
-            "eq",
-        ],
-    )
-    df = df.rename(columns={"mo": "month", "dy": "day"})
-
-    df = _normalize_calendar(df)
-    df = _drop_out_of_bounds(df)
-
-    wanted = [
-        "id",
-        "year",
-        "month",
-        "day",
-        "hr",
-        "mn",
-        "sec",
-        "name",
-        "location",
-        "country",
-        "latitude",
-        "longitude",
-        "elevation",
-        "type",
-        "status",
-        "vei",
-        "eq",
-        "agent",
-        "tsu",
-    ]
-    existing = [c for c in wanted if c in df.columns]
-    df = df[existing].copy()
-
-    must_have = [c for c in ("latitude", "longitude", "year", "tsu") if c in df.columns]
-    df = df.dropna(subset=must_have)
-
-    df = _drop_duplicates_smart(df, dataset="volcanic")
-
-    df = df.loc[:, ~df.columns.duplicated()].reset_index(drop=True)
-
-    # ====== ENFORCE TIPE DATA SESUAI TABEL 7 ======
-    num_cols_float = [
-        "id",
-        "year",
-        "month",
-        "day",
-        "latitude",
-        "longitude",
-        "elevation",
-        "vei",
-        "eq",
-    ]
-    for c in num_cols_float:
-        if c in df.columns:
-            df[c] = pd.to_numeric(df[c], errors="coerce").astype("float64")
-
-    for c in ["name", "location", "country", "type", "status", "agent"]:
-        if c in df.columns:
-            df[c] = df[c].astype("object")
-
-    if "tsu" in df.columns:
-        df["tsu"] = df["tsu"].astype("int64")
-
-    return df
-
-
-# ================== NORMALIZATION + ENCODING (PER DOMAIN) ==================
-def encode_and_scale(
-    df: pd.DataFrame,
-    dataset: str,
-    normalize: bool = True,
-) -> Tuple[pd.DataFrame, Pipeline | None, List[str], List[str]]:
-    """
-    Buat dataset final fitur (scaled + one-hot) + kolom target 'tsu' di akhir
-    untuk masing-masing domain (tectonic / volcanic).
-
-    Catatan: Untuk pipeline Stacking multi-class, kita akan membangun dataset
-    gabungan events (lihat build_events_dataset). Fungsi ini tetap dipertahankan
-    karena dipakai untuk tabel skema domain di tesis.
-    """
-    if "tsu" not in df.columns:
-        raise KeyError(f"[{dataset}] kolom target 'tsu' tidak ditemukan setelah cleaning.")
-
-    # pastikan tsu int64
-    y = df["tsu"].astype("int64")
-
-    if dataset == "tectonic":
-        num_cols = [
-            c
-            for c in (
-                "mag",
-                "depth",
-                "mmi_int",
-                "latitude",
-                "longitude",
-                "year",
-                "month",
-                "day",
-            )
-            if c in df.columns
-        ]
-        cat_cols = [c for c in ("country", "region", "area", "location") if c in df.columns]
-    else:
-        num_cols = [
-            c
-            for c in (
-                "vei",
-                "elevation",
-                "latitude",
-                "longitude",
-                "year",
-                "month",
-                "day",
-                "eq",
-            )
-            if c in df.columns
-        ]
-        cat_cols = [c for c in ("country", "type", "status", "location", "name") if c in df.columns]
-
-    X = df[num_cols + cat_cols].copy()
-
-    if not normalize:
-        out = X.copy()
-        out["tsu"] = y.values
-        return out, None, num_cols, cat_cols
-
-    ct = ColumnTransformer(
-        transformers=[
-            ("num", StandardScaler(), num_cols),
-            (
-                "cat",
-                OneHotEncoder(
-                    handle_unknown="ignore",
-                    sparse_output=False,
-                    min_frequency=0.01,
-                ),
-                cat_cols,
-            ),
-        ],
-        remainder="drop",
-        verbose_feature_names_out=False,
-    )
-    pipe = Pipeline([("ct", ct)])
-
-    X_t = pipe.fit_transform(X)
-    out_cols = pipe.get_feature_names_out()
-    X_df = pd.DataFrame(X_t, columns=out_cols, index=X.index)
-    X_df["tsu"] = y.values
-
-    dump(pipe, ART / f"{dataset}_preprocess_pipe.joblib")
-    dump(num_cols, ART / f"{dataset}_num_cols.joblib")
-    dump(cat_cols, ART / f"{dataset}_cat_cols.joblib")
-    pd.DataFrame({"feature": out_cols}).to_csv(
-        TAB / f"{dataset}_feature_names.csv", index=False
-    )
-
-    return X_df, pipe, num_cols, cat_cols
-
-
-# ================== DATASET GABUNGAN EVENTS (MULTI-CLASS 0/1/2) ==================
-
-def build_events_dataset(
-    df_t_clean: pd.DataFrame,
-    df_v_clean: pd.DataFrame,
-    min_year_modern: int = 1900,
-) -> pd.DataFrame:
-    """
-    Bangun dataset gabungan multi-class untuk Stacking:
-
-    label:
-        0 = non-tsunami
-        1 = tsunami tektonik
-        2 = tsunami vulkanik
-
-    Aturan label:
-    - Data tektonik: domain sudah "earthquake", jadi:
-        tsu == 1 -> label = 1
-        tsu == 0 -> label = 0
-    - Data vulkanik: domain sudah "volcanic eruption", jadi:
-        tsu == 1 -> label = 2
-        tsu == 0 -> label = 0
-
-    Fitur utama (disederhanakan):
-    - Tektonik : mag, depth, latitude, longitude
-    - Vulkanik : vei, elevation, latitude, longitude
-
-    Dataset gabungan memakai union dari fitur-fitur di atas.
-    Untuk domain yang tidak punya suatu fitur, kolom tersebut diisi NaN
-    dan akan diimputasi di langkah berikutnya.
-    """
-    df_t = df_t_clean.copy()
-    df_v = df_v_clean.copy()
-
-    # Filter era modern (>= min_year_modern)
-    if "year" in df_t.columns:
-        before_t = len(df_t)
-        df_t = df_t[df_t["year"] >= float(min_year_modern)]
-        print(f"[Events] Tectonic: year >= {min_year_modern}: {before_t} -> {len(df_t)} baris.")
-    if "year" in df_v.columns:
-        before_v = len(df_v)
-        df_v = df_v[df_v["year"] >= float(min_year_modern)]
-        print(f"[Events] Volcanic: year >= {min_year_modern}: {before_v} -> {len(df_v)} baris.")
-
-    # Pastikan kolom tsu ada
-    if "tsu" not in df_t.columns or "tsu" not in df_v.columns:
-        raise KeyError("[Events] Kolom 'tsu' tidak ditemukan di salah satu domain.")
-
-    # Label multi-class
-    df_t["label"] = np.where(df_t["tsu"] == 1, 1, 0)
-    df_v["label"] = np.where(df_v["tsu"] == 1, 2, 0)
-
-    # Definisi fitur domain-spesifik
-    tectonic_feats = ["mag", "depth", "latitude", "longitude"]
-    volcanic_feats = ["vei", "elevation", "latitude", "longitude"]
-
-    base_cols = sorted(set(tectonic_feats + volcanic_feats))
-
-    # Pastikan semua kolom fitur ada di kedua domain (kalau tidak, isi NaN)
-    for c in base_cols:
-        if c not in df_t.columns:
-            df_t[c] = np.nan
-        if c not in df_v.columns:
-            df_v[c] = np.nan
-
-    cols = base_cols + ["label"]
-
-    events_t = df_t[cols].copy()
-    events_v = df_v[cols].copy()
-
-    events = pd.concat([events_t, events_v], ignore_index=True)
-
-    # Drop baris yang label-nya NaN (harusnya tidak ada)
-    events = events.dropna(subset=["label"])
-    events["label"] = events["label"].astype("int64")
-
-    print(
-        "[Events] Dataset gabungan dibuat: "
-        f"{len(events)} baris, {events.shape[1]} kolom (fitur+label)."
-    )
-
-    return events
-
-
-def split_and_save_events(
-    events: pd.DataFrame,
-    test_size: float = 0.2,
-    random_state: int = 42,
-    normalize: bool = True,
+    non_feature_set = set(NON_FEATURE_CANDIDATES + [target_col])
+
+    # 1) kandidat fitur yang tersedia di df
+    candidates_set = set(FEATURE_CANDIDATES)
+    feature_cols = [c for c in df.columns if c in candidates_set and c != target_col]
+    feature_cols = [c for c in feature_cols if c not in non_feature_set]
+
+    # minimal 3 fitur; kalau kurang → fallback ke semua numerik
+    if len(feature_cols) < 3:
+        _log(
+            "[Pre] WARNING: jumlah fitur dari FEATURE_CANDIDATES terlalu sedikit "
+            f"({len(feature_cols)}). Fallback ke semua kolom numerik."
+        )
+        num_cols_all = df.select_dtypes(include=[np.number]).columns.tolist()
+        feature_cols = [c for c in num_cols_all if c not in non_feature_set]
+
+    X = df[feature_cols].copy()
+
+    # deteksi numerik vs kategorikal
+    num_cols = X.select_dtypes(include=[np.number]).columns.tolist()
+    cat_cols = [c for c in X.columns if c not in num_cols]
+
+    _log(f"[Pre] Fitur terpilih ({len(feature_cols)} kolom): {feature_cols}")
+    _log(f"[Pre]  - numerik    : {num_cols}")
+    _log(f"[Pre]  - kategorikal: {cat_cols}")
+
+    return X, num_cols, cat_cols
+
+
+# ---------- Imputasi + OHE + VarianceThreshold ----------
+def _impute_and_encode(
+    X_train: pd.DataFrame,
+    X_test: pd.DataFrame,
+    dataset_name: str,
+    num_cols: List[str],
+    cat_cols: List[str],
 ) -> Tuple[pd.DataFrame, pd.DataFrame]:
     """
-    Split dataset gabungan events menjadi train/test terstratifikasi,
-    lalu (opsional) normalisasi + imputasi secara ANTI-LEAKAGE:
+    Imputasi & encoding:
+    - Numerik   : SimpleImputer(median)
+    - Kategorik : SimpleImputer(most_frequent) + OneHotEncoder(handle_unknown='ignore')
+    - Gabungkan numerik + OHE, lalu VarianceThreshold(0.0) untuk drop zero-variance.
 
-    - Fit imputer+scaler hanya di X_train
-    - Transform ke X_train dan X_test
-    - Simpan ke:
-        data/processed/events_train.csv
-        data/processed/events_test.csv
-
-    Kolom target: 'label' (0/1/2).
+    Artifacts (untuk serving nanti) disimpan di artifacts/:
+        - {dataset}_num_imputer.joblib
+        - {dataset}_cat_imputer.joblib  (jika ada kategorikal)
+        - {dataset}_ohe_encoder.joblib  (jika ada kategorikal)
+        - {dataset}_var_selector.joblib
+        - {dataset}_feature_names.joblib
     """
-    if "label" not in events.columns:
-        raise KeyError("[Events] Kolom 'label' tidak ditemukan di dataset gabungan.")
+    X_train = X_train.copy()
+    X_test = X_test.copy()
 
-    y = events["label"].astype("int64")
-    X = events.drop(columns=["label"])
+    # Ganti inf/-inf → NaN (jaga-jaga)
+    X_train = _replace_non_finite(X_train)
+    X_test = _replace_non_finite(X_test)
 
-    X_train, X_test, y_train, y_test = train_test_split(
-        X,
+    num_imputer = SimpleImputer(strategy="median")
+    cat_imputer = SimpleImputer(strategy="most_frequent") if cat_cols else None
+    ohe = _one_hot_encoder() if cat_cols else None
+
+    # --- Numerik ---
+    if num_cols:
+        Xtr_num = num_imputer.fit_transform(X_train[num_cols])
+        Xte_num = num_imputer.transform(X_test[num_cols])
+        num_feature_names = num_cols
+    else:
+        Xtr_num = np.empty((len(X_train), 0))
+        Xte_num = np.empty((len(X_test), 0))
+        num_feature_names = []
+
+    # --- Kategorikal + OHE ---
+    if cat_cols and cat_imputer is not None and ohe is not None:
+        Xtr_cat_imp = cat_imputer.fit_transform(X_train[cat_cols].astype("object"))
+        Xte_cat_imp = cat_imputer.transform(X_test[cat_cols].astype("object"))
+
+        Xtr_cat_ohe = ohe.fit_transform(Xtr_cat_imp)
+        Xte_cat_ohe = ohe.transform(Xte_cat_imp)
+
+        ohe_feature_names = ohe.get_feature_names_out(cat_cols).tolist()
+    else:
+        Xtr_cat_ohe = np.empty((len(X_train), 0))
+        Xte_cat_ohe = np.empty((len(X_test), 0))
+        ohe_feature_names: List[str] = []
+
+    # --- Gabungkan numerik + kategorikal ---
+    Xtr_all = np.hstack([Xtr_num, Xtr_cat_ohe])
+    Xte_all = np.hstack([Xte_num, Xte_cat_ohe])
+    all_feature_names = num_feature_names + ohe_feature_names
+
+    # --- Drop zero-variance features ---
+    if Xtr_all.shape[1] > 0:
+        vt = VarianceThreshold(threshold=0.0)
+        Xtr_sel = vt.fit_transform(Xtr_all)
+        Xte_sel = vt.transform(Xte_all)
+
+        kept_mask = vt.get_support()
+        kept_names = [
+            name for flag, name in zip(kept_mask, all_feature_names) if flag
+        ]
+    else:
+        vt = VarianceThreshold(threshold=0.0)
+        Xtr_sel = Xtr_all
+        Xte_sel = Xte_all
+        kept_names: List[str] = []
+
+    X_train_proc = pd.DataFrame(Xtr_sel, columns=kept_names, index=X_train.index)
+    X_test_proc = pd.DataFrame(Xte_sel, columns=kept_names, index=X_test.index)
+
+    # Simpan artifacts untuk serving/API
+    dump(num_imputer, ART / f"{dataset_name}_num_imputer.joblib")
+    if cat_imputer is not None:
+        dump(cat_imputer, ART / f"{dataset_name}_cat_imputer.joblib")
+    if ohe is not None:
+        dump(ohe, ART / f"{dataset_name}_ohe_encoder.joblib")
+    dump(vt, ART / f"{dataset_name}_var_selector.joblib")
+    dump(kept_names, ART / f"{dataset_name}_feature_names.joblib")
+
+    _log(f"[Pre] Fitur akhir setelah VarianceThreshold: {len(kept_names)} kolom.")
+    return X_train_proc, X_test_proc
+
+
+# ---------- Pipeline utama ----------
+def preprocess_events(
+    input_path: Path,
+    dataset_name: str = "events",
+    year_min: int = 1900,
+    test_size: float = 0.2,
+    random_state: int = 42,
+) -> None:
+    """
+    Pipeline utama:
+        - load events_fe.csv (atau file lain yang ditentukan)
+        - filter tahun >= year_min
+        - labeling 0/1/2 → kolom 'label'
+        - pilih fitur sederhana
+        - imputasi + OHE + drop zero-variance
+        - split train/test (stratified)
+        - simpan events_train.csv & events_test.csv
+    """
+    if not input_path.exists():
+        raise FileNotFoundError(
+            f"[Pre] File input '{input_path}' tidak ditemukan.\n"
+            "Pastikan feature_engineering.py sudah menghasilkan events_fe.csv."
+        )
+
+    _log(f"[Pre] Load: {input_path}")
+    df = _read_csv(input_path)
+
+    # 1) deteksi kolom tahun & filter >= year_min
+    year_col = _find_column(df, ["year", "Year", "YEAR"])
+    if year_col is None:
+        _log("[Pre] WARNING: kolom 'year' tidak ditemukan, skip filter tahun.")
+    else:
+        _log(f"[Pre] Filter tahun: kolom='{year_col}' >= {year_min}")
+        df = df[df[year_col] >= year_min].copy()
+
+    # 2) buat label 0/1/2
+    label_series, flag_col, cause_col = _build_tsunami_label(df)
+    df["label"] = label_series
+
+    _log(
+        "[Pre] Distribusi label (0=non,1=tektonik,2=vulkanik): "
+        + repr(df["label"].value_counts().sort_index().to_dict())
+    )
+
+    # 3) pilih fitur (pakai df dengan semua kolom, target 'label')
+    X_all, num_cols, cat_cols = _select_feature_columns(df=df, target_col="label")
+    y = df["label"].astype("int64")
+
+    # 4) split stratified train/test
+    X_train_raw, X_test_raw, y_train, y_test = train_test_split(
+        X_all,
         y,
         test_size=test_size,
         random_state=random_state,
         stratify=y,
     )
-
-    if not normalize:
-        train_df = X_train.copy()
-        train_df["label"] = y_train.values
-        test_df = X_test.copy()
-        test_df["label"] = y_test.values
-
-        train_df.to_csv(PROCESSED / "events_train.csv", index=False)
-        test_df.to_csv(PROCESSED / "events_test.csv", index=False)
-
-        print(
-            "[Events] Split train/test tanpa normalisasi.\n"
-            f" - events_train.csv : {train_df.shape}\n"
-            f" - events_test.csv  : {test_df.shape}"
-        )
-        return train_df, test_df
-
-    # Semua fitur di sini numerik (mag, depth, vei, elevation, lat, lon)
-    num_cols = X_train.columns.tolist()
-
-    ct = ColumnTransformer(
-        transformers=[
-            (
-                "num",
-                Pipeline(
-                    steps=[
-                        ("imputer", SimpleImputer(strategy="median")),
-                        ("scaler", StandardScaler()),
-                    ]
-                ),
-                num_cols,
-            )
-        ],
-        remainder="drop",
-        verbose_feature_names_out=False,
+    _log(
+        f"[Pre] Split: train={X_train_raw.shape}, test={X_test_raw.shape}, "
+        f"test_size={test_size}"
     )
 
-    pipe = Pipeline([("ct", ct)])
+    # 5) imputasi + OHE + drop zero-variance
+    X_train_proc, X_test_proc = _impute_and_encode(
+        X_train=X_train_raw,
+        X_test=X_test_raw,
+        dataset_name=dataset_name,
+        num_cols=num_cols,
+        cat_cols=cat_cols,
+    )
 
-    X_train_t = pipe.fit_transform(X_train)
-    X_test_t = pipe.transform(X_test)
-
-    # Karena hanya ada satu transformer numerik, nama kolom tetap num_cols
-    out_cols = num_cols
-
-    train_df = pd.DataFrame(X_train_t, columns=out_cols, index=X_train.index)
-    test_df = pd.DataFrame(X_test_t, columns=out_cols, index=X_test.index)
+    # 6) gabungkan kembali dengan label, simpan ke CSV
+    train_df = X_train_proc.copy()
     train_df["label"] = y_train.values
+
+    test_df = X_test_proc.copy()
     test_df["label"] = y_test.values
 
-    train_df.to_csv(PROCESSED / "events_train.csv", index=False)
-    test_df.to_csv(PROCESSED / "events_test.csv", index=False)
+    train_path = PROCESSED / f"{dataset_name}_train.csv"
+    test_path = PROCESSED / f"{dataset_name}_test.csv"
 
-    dump(pipe, ART / "events_preprocess_pipe.joblib")
-    pd.DataFrame({"feature": out_cols}).to_csv(
-        TAB / "events_feature_names.csv", index=False
+    _savetab(train_df, train_path)
+    _savetab(test_df, test_path)
+
+    # 7) simpan ringkasan untuk laporan
+    label_counts = (
+        y.value_counts()
+        .sort_index()
+        .rename("count")
+        .reset_index()
+        .rename(columns={"index": "label"})
+    )
+    _savetab(label_counts, TAB / f"{dataset_name}_label_distribution.csv")
+
+    _log(f"[Pre] Saved train  : {train_path}")
+    _log(f"[Pre] Saved test   : {test_path}")
+    _log(f"[Pre] Label summary: {TAB / f'{dataset_name}_label_distribution.csv'}")
+
+
+# ---------- CLI ----------
+def main() -> None:
+    parser = argparse.ArgumentParser(
+        description="Preprocessing events (multiclass 0/1/2) untuk prediksi tsunami."
+    )
+    parser.add_argument(
+        "--input",
+        type=str,
+        default=str(PROCESSED / "events_fe.csv"),
+        help="Path input CSV (default: data/processed/events_fe.csv).",
+    )
+    parser.add_argument(
+        "--dataset-name",
+        type=str,
+        default="events",
+        help="Nama dataset/prefix output (default: 'events').",
+    )
+    parser.add_argument(
+        "--year-min",
+        type=int,
+        default=1900,
+        help="Tahun minimum data yang disertakan (default=1900).",
+    )
+    parser.add_argument(
+        "--test-size",
+        type=float,
+        default=0.2,
+        help="Proporsi test set (default=0.2).",
+    )
+    parser.add_argument(
+        "--random-state",
+        type=int,
+        default=42,
+        help="Seed random untuk split & imputasi (default=42).",
     )
 
-    print(
-        "[Events] Split train/test + normalisasi selesai.\n"
-        f" - events_train.csv : {train_df.shape}\n"
-        f" - events_test.csv  : {test_df.shape}"
+    args = parser.parse_args()
+
+    input_path = Path(args.input)
+
+    _log("[Pre] Preprocessing pipeline start …")
+    preprocess_events(
+        input_path=input_path,
+        dataset_name=args.dataset_name,
+        year_min=args.year_min,
+        test_size=args.test_size,
+        random_state=args.random_state,
     )
-
-    return train_df, test_df
-
-
-# ================== WRITE/REUSE HELPERS ==================
-def _save_or_reuse_clean(
-    df_t_clean: pd.DataFrame,
-    df_v_clean: pd.DataFrame,
-    overwrite: bool,
-) -> tuple[pd.DataFrame, pd.DataFrame]:
-    out_t_clean = PROCESSED / "tectonic.csv"
-    out_v_clean = PROCESSED / "volcanic.csv"
-
-    if out_t_clean.exists() and out_v_clean.exists() and not overwrite:
-        print(
-            "[INFO] Clean CSVs already exist — reusing. "
-            "Use --overwrite to regenerate."
-        )
-        # gunakan versi di disk agar konsisten dengan langkah berikutnya
-        return pd.read_csv(out_t_clean), pd.read_csv(out_v_clean)
-
-    # tulis ulang (overwrite True atau belum ada file)
-    df_t_clean.to_csv(out_t_clean, index=False)
-    df_v_clean.to_csv(out_v_clean, index=False)
-    return df_t_clean, df_v_clean
-
-
-def _maybe_write_csv(
-    df: pd.DataFrame,
-    path: Path,
-    overwrite: bool,
-    label: str,
-) -> None:
-    if path.exists() and not overwrite:
-        print(f"[INFO] Reusing existing {label}: {path.name}")
-    else:
-        df.to_csv(path, index=False)
-
-
-# ================== MAIN ==================
-def main(
-    overwrite: bool = False,
-    normalize: bool = True,
-    kanamori_levelA: bool = False,
-    min_mag: float = 7.0,
-    max_depth: float = 70.0,
-    min_year_modern: int = 1900,
-) -> None:
-    # cari file mentah (nama baru & fallback)
-    raw_tec = next(
-        (
-            p
-            for p in (
-                RAW / "tectonic.csv",
-                RAW / "raw_tectonic_global.csv",
-                RAW / "raw_tectonic.csv",
-            )
-            if p.exists()
-        ),
-        None,
-    )
-    raw_vul = next(
-        (
-            p
-            for p in (
-                RAW / "volcanic.csv",
-                RAW / "raw_volcanic_global.csv",
-                RAW / "raw_volcanic.csv",
-            )
-            if p.exists()
-        ),
-        None,
-    )
-    if raw_tec is None or raw_vul is None:
-        raise FileNotFoundError(
-            "Raw files not found.\n"
-            f"  Tectonic : {RAW / 'tectonic.csv'} (fallback: raw_tectonic_global.csv)\n"
-            f"  Volcanic : {RAW / 'volcanic.csv'} (fallback: raw_volcanic_global.csv)"
-        )
-
-    # baca raw
-    df_t_raw = _read_csv_guess(raw_tec)
-    df_v_raw = _read_csv_guess(raw_vul)
-
-    # ---------- FILTERING + CLEANING ----------
-    df_t_clean0 = prepare_tectonic(df_t_raw)
-    df_v_clean0 = prepare_volcanic(df_v_raw)
-
-    # manual exclude (tsunami ambigu versi manual) jika ada file
-    excl_map = _load_manual_exclude(MANUAL_EXCLUDE)
-    if excl_map:
-        df_t_clean0 = _apply_manual_exclude(df_t_clean0, "tectonic", excl_map)
-        df_v_clean0 = _apply_manual_exclude(df_v_clean0, "volcanic", excl_map)
-
-    # Otomatis: pindahkan tsunami ambigu (tsu=1 tapi mag<min_mag atau depth>max_depth)
-    # ke CSV terpisah, lalu hapus dari dataset training
-    df_t_clean0 = _drop_tectonic_ambiguous_tsu(
-        df_t_clean0,
-        min_mag=min_mag,
-        max_depth=max_depth,
-    )
-
-    # Kanamori Level A (hanya tectonic) jika diminta
-    if kanamori_levelA:
-        df_t_clean0 = _apply_kanamori_levelA(
-            df_t_clean0,
-            min_mag=min_mag,
-            max_depth=max_depth,
-        )
-
-    # jika ada filtering ekstra (Kanamori / manual exclude / ambiguous) kita paksa overwrite
-    effective_overwrite = overwrite or kanamori_levelA or bool(excl_map)
-
-    # simpan/reuse clean
-    df_t_clean, df_v_clean = _save_or_reuse_clean(
-        df_t_clean0,
-        df_v_clean0,
-        overwrite=effective_overwrite,
-    )
-
-    # QC tables untuk CLEAN (selalu update agar sesuai isi terkini)
-    _save_info_tables(df_t_clean, "tectonic_clean")
-    _save_info_tables(df_v_clean, "volcanic_clean")
-
-    # Tabel skema + contoh data nyata (Tabel 6 & 7 + sample)
-    _save_schema_and_samples(df_t_clean, "tectonic")
-    _save_schema_and_samples(df_v_clean, "volcanic")
-
-    # ---------- (OPSIONAL) NORMALIZATION + ENCODING PER DOMAIN ----------
-    df_t_prep, _, _, _ = encode_and_scale(
-        df_t_clean,
-        dataset="tectonic",
-        normalize=normalize,
-    )
-    df_v_prep, _, _, _ = encode_and_scale(
-        df_v_clean,
-        dataset="volcanic",
-        normalize=normalize,
-    )
-
-    out_t_prep = PROCESSED / "tectonic_preprocessed.csv"
-    out_v_prep = PROCESSED / "volcanic_preprocessed.csv"
-    _maybe_write_csv(df_t_prep, out_t_prep, effective_overwrite, "preprocessed tectonic")
-    _maybe_write_csv(df_v_prep, out_v_prep, effective_overwrite, "preprocessed volcanic")
-
-    # ---------- NEW: DATASET GABUNGAN EVENTS UNTUK STACKING MULTI-CLASS ----------
-    events = build_events_dataset(
-        df_t_clean=df_t_clean,
-        df_v_clean=df_v_clean,
-        min_year_modern=min_year_modern,
-    )
-    events_clean_path = PROCESSED / "events_clean.csv"
-    events.to_csv(events_clean_path, index=False)
-
-    df_events_train, df_events_test = split_and_save_events(
-        events,
-        test_size=0.2,
-        random_state=42,
-        normalize=normalize,
-    )
-
-    # Ringkasan bentuk untuk semua dataset utama
-    _save_shape_summary(
-        [
-            ("tectonic_clean", len(df_t_clean), df_t_clean.shape[1]),
-            ("volcanic_clean", len(df_v_clean), df_v_clean.shape[1]),
-            ("tectonic_preprocessed", len(df_t_prep), df_t_prep.shape[1]),
-            ("volcanic_preprocessed", len(df_v_prep), df_v_prep.shape[1]),
-            ("events_clean", len(events), events.shape[1]),
-            ("events_train", len(df_events_train), df_events_train.shape[1]),
-            ("events_test", len(df_events_test), df_events_test.shape[1]),
-        ]
-    )
-
-    print(
-        "[DONE] Preprocessing selesai.\n"
-        f"- Clean (tectonic)   : {PROCESSED / 'tectonic.csv'}\n"
-        f"- Clean (volcanic)   : {PROCESSED / 'volcanic.csv'}\n"
-        f"- Preprocessed (tec) : {out_t_prep}\n"
-        f"- Preprocessed (vul) : {out_v_prep}\n"
-        f"- Events (clean)     : {events_clean_path}\n"
-        f"- Events (train)     : {PROCESSED / 'events_train.csv'}\n"
-        f"- Events (test)      : {PROCESSED / 'events_test.csv'}\n"
-        f"- Artifacts (pipes)  : {ART}\n"
-        f"- QC tables & schema : {TAB}\n"
+    _log(
+        f"[DONE] Preprocessing selesai.\n"
+        f" - INPUT : {input_path}\n"
+        f" - DATA  : {PROCESSED}\n"
+        f" - TAB   : {TAB}\n"
+        f" - ART   : {ART}"
     )
 
 
 if __name__ == "__main__":
-    ap = argparse.ArgumentParser(
-        description=(
-            "Preprocessing = Filtering + Cleaning + "
-            "(Optional) Normalization+Encoding + Build events dataset"
-        )
-    )
-    ap.add_argument(
-        "--overwrite",
-        action="store_true",
-        help="replace processed files if exist",
-    )
-    ap.add_argument(
-        "--no-normalize",
-        action="store_true",
-        help="skip normalization & encoding (domain & events)",
-    )
-    ap.add_argument(
-        "--kanamori-levelA",
-        action="store_true",
-        help=(
-            "Filter dataset tektonik sesuai kriteria Kanamori "
-            "(magnitude>=min-mag, depth<=max-depth)."
-        ),
-    )
-    ap.add_argument(
-        "--min-mag",
-        type=float,
-        default=7.0,
-        help="Batas bawah magnitudo untuk Kanamori Level A (default=7.0).",
-    )
-    ap.add_argument(
-        "--max-depth",
-        type=float,
-        default=70.0,
-        help="Batas atas kedalaman (km) untuk Kanamori Level A (default=70).",
-    )
-    ap.add_argument(
-        "--min-year-modern",
-        type=int,
-        default=1900,
-        help=(
-            "Batas bawah tahun untuk dataset gabungan events "
-            "(event dengan year < min-year-modern akan dibuang)."
-        ),
-    )
-    args = ap.parse_args()
-    main(
-        overwrite=args.overwrite,
-        normalize=not args.no_normalize,
-        kanamori_levelA=args.kanamori_levelA,
-        min_mag=args.min_mag,
-        max_depth=args.max_depth,
-        min_year_modern=args.min_year_modern,
-    )
+    main()

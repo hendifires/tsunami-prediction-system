@@ -1,44 +1,61 @@
-# src/tsunami_prediction/smote_pipeline.py
 from __future__ import annotations
 # cSpell:ignore oversampling imbalanced
 
 """
-SMOTE pipeline sederhana untuk dataset gabungan multi-class (events):
+SMOTE pipeline sederhana untuk dataset gabungan multi-class (events).
 
-Desain baru (sinkron dengan preprocessing & stacking):
+Sinkron dengan preprocessing & stacking (multi-class: 0=non,1=tektonik,2=vulkanik).
 
-- Dataset utama:
-    * data/processed/events_train.csv  -> fitur + label (0=non,1=tektonik,2=vulkanik)
-    * data/processed/events_test.csv   -> test set (tidak disentuh SMOTE)
+------------------------------------
+1. DATASET & FILE YANG DIGUNAKAN
+------------------------------------
+Prefix dataset (default: "events"):
 
-- Tugas file ini:
-    * Membaca events_train.csv
-    * Menerapkan SMOTE standar (imblearn.over_sampling.SMOTE) pada training set
-      dengan target multi-class 'label'.
-    * Menyimpan hasil oversampling ke:
-          data/processed/events_train_smote.csv
-    * Membuat ringkasan imbalance:
-          reports/tables/events_smote_summary.csv
-    * Membuat visual perbandingan jumlah sampel per kelas sebelum/sesudah:
-          reports/figures/events_smote_bar.png
-          reports/figures/events_smote_pie.png
+- Input utama (dari preprocessing.py):
+    * data/processed/{dataset}_train.csv  -> fitur + label (0/1/2)
+    * data/processed/{dataset}_test.csv   -> test set (TIDAK disentuh SMOTE)
 
-- Tujuan ilmiah:
-    * Menyediakan skenario "dengan SMOTE" untuk dibandingkan dengan
-      baseline (tanpa SMOTE) di Stacking Ensemble:
-        - baseline   : events_train.csv       (no SMOTE)
-        - SMOTE      : events_train_smote.csv (SMOTE di training set)
+- Output dari script ini:
+    * data/processed/{dataset}_train_smote.csv
+    * reports/tables/{dataset}_smote_summary.csv
+    * reports/figures/{dataset}_smote_bar.png
+    * reports/figures/{dataset}_smote_pie.png
+    * artifacts/{dataset}_smote_config.joblib  (metadata konfigurasi SMOTE)
 
-Catatan:
-- Test set TIDAK pernah di-oversampling (anti-data-leakage).
-- Hanya pakai SMOTE standar; tidak ada SMOTE-Tomek / SMOTEENN / ADASYN
-  dan tidak ada split ulang (semua split dilakukan di preprocessing.py).
+------------------------------------
+2. PERAN DALAM PENELITIAN
+------------------------------------
+Script ini menyiapkan **skenario "dengan SMOTE"** untuk dibandingkan dengan
+baseline (tanpa SMOTE) pada Stacking Ensemble, yaitu:
+
+- Baseline (no-SMOTE)   : {dataset}_train.csv
+- Dengan SMOTE standar  : {dataset}_train_smote.csv
+
+Test set TIDAK pernah di-oversample (anti data leakage); split train/test
+selalu dilakukan di preprocessing.py.
+
+------------------------------------
+3. STRATEGI SAMPLING
+------------------------------------
+Argumen CLI --sampling-strategy mendukung dua mode:
+
+- "not majority" (default, dan yang digunakan di tesis):
+    - Menggunakan SMOTE(sampling_strategy="not majority")
+      → semua kelas minoritas di-oversample hingga menyamai kelas mayoritas.
+
+- "auto":
+    - Menggunakan SMOTE(sampling_strategy="auto")
+      → penentuan strategi diserahkan ke implementasi SMOTE.
+
+Untuk kebutuhan eksplorasi lanjutan (di luar tesis), fungsi run_smote_events
+juga menerima dict custom {class_label: target_count} bila dipanggil langsung
+dari kode Python, tetapi mode ini tidak dibahas di naskah tesis.
 """
 
 import argparse
-import ast
+from collections import Counter
 from pathlib import Path
-from typing import Dict
+from typing import Dict, List, Union
 
 import matplotlib
 
@@ -47,12 +64,9 @@ matplotlib.use("Agg")  # non-GUI backend
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
-from collections import Counter
-
 from imblearn.over_sampling import SMOTE
-
+from joblib import dump
 from matplotlib.ticker import ScalarFormatter
-
 
 # ---------------- PATHS ----------------
 ROOT = Path(__file__).resolve().parents[2]
@@ -66,8 +80,14 @@ ART = ROOT / "artifacts"
 for p in (PROCESSED, TAB, FIG, ART):
     p.mkdir(parents=True, exist_ok=True)
 
+# Nama kolom target yang didukung (multi-class 0/1/2)
+TARGET_CANDIDATES: List[str] = ["tsunami_label", "label", "tsu"]
+
 
 # ---------- Utils kecil ----------
+def _log(msg: str) -> None:
+    print(msg, flush=True)
+
 
 def _read_csv(p: Path) -> pd.DataFrame:
     return pd.read_csv(p)
@@ -92,23 +112,47 @@ def _format_axis_plain(ax) -> None:
 
 
 def _replace_non_finite(X: pd.DataFrame) -> pd.DataFrame:
-    """Ganti inf/-inf dengan NaN, lalu isi NaN dengan 0 (fitur sudah di-scale sebelumnya)."""
+    """
+    Ganti inf/-inf dengan NaN, lalu isi NaN dengan 0.
+
+    Asumsi: preprocessing.py sudah melakukan imputasi dan scaling.
+    Langkah ini hanya untuk jaga-jaga agar SMOTE tidak error karena nilai ekstrem.
+    """
     X = X.replace([np.inf, -np.inf], np.nan)
     return X.fillna(0.0)
 
 
 def _class_counts(y: pd.Series) -> Dict[int, int]:
-    """Hitung jumlah sampel per kelas (dikembalikan sebagai dict)."""
+    """Hitung jumlah sampel per kelas (dikembalikan sebagai dict terurut)."""
     cnt = Counter(int(v) for v in y)
-    # sort by class label
     return dict(sorted(cnt.items(), key=lambda kv: kv[0]))
 
 
-# ---------- Visualisasi imbalance ----------
+def _find_target_column(df: pd.DataFrame) -> str:
+    """
+    Cari nama kolom target berdasarkan kandidat yang sudah ditentukan.
+    Raise error kalau tidak ditemukan.
+    """
+    for col in TARGET_CANDIDATES:
+        if col in df.columns:
+            return col
+    raise KeyError(
+        f"[SMOTE] Kolom target tidak ditemukan. "
+        f"Diharapkan salah satu dari: {TARGET_CANDIDATES}, "
+        f"tetapi kolom yang ada: {list(df.columns)}"
+    )
 
-def plot_bar(before: Dict[int, int], after: Dict[int, int], out_png: Path) -> None:
+
+# ---------- Visualisasi imbalance ----------
+def plot_bar(
+    before: Dict[int, int],
+    after: Dict[int, int],
+    dataset: str,
+    out_png: Path,
+) -> None:
     """
     Bar plot jumlah sampel per kelas sebelum dan sesudah SMOTE.
+
     Label kelas:
         0 = non-tsunami
         1 = tsunami tektonik
@@ -133,23 +177,42 @@ def plot_bar(before: Dict[int, int], after: Dict[int, int], out_png: Path) -> No
     ax.set_xticks(x)
     ax.set_xticklabels(labels_str)
     ax.set_ylabel("Jumlah Sampel")
-    ax.set_title("Kelas sebelum dan sesudah SMOTE (events_train)")
+    ax.set_title(f"Kelas sebelum dan sesudah SMOTE ({dataset}_train)")
     ax.legend()
 
-    # Tulis angka di atas bar
     ymax = max(before_vals + after_vals) if (before_vals + after_vals) else 0
     offset = max(1, int(0.02 * max(ymax, 1)))
     for i, v in enumerate(before_vals):
-        ax.text(x[i] - width / 2, v + offset, str(int(v)), ha="center", va="bottom", fontsize=8)
+        ax.text(
+            x[i] - width / 2,
+            v + offset,
+            str(int(v)),
+            ha="center",
+            va="bottom",
+            fontsize=8,
+        )
     for i, v in enumerate(after_vals):
-        ax.text(x[i] + width / 2, v + offset, str(int(v)), ha="center", va="bottom", fontsize=8)
+        ax.text(
+            x[i] + width / 2,
+            v + offset,
+            str(int(v)),
+            ha="center",
+            va="bottom",
+            fontsize=8,
+        )
 
     _savefig(out_png)
 
 
-def plot_pie(before: Dict[int, int], after: Dict[int, int], out_png: Path) -> None:
+def plot_pie(
+    before: Dict[int, int],
+    after: Dict[int, int],
+    dataset: str,
+    out_png: Path,
+) -> None:
     """
-    Pie chart proporsi kelas sebelum & sesudah SMOTE dalam satu kanvas (2 subplots).
+    Pie chart proporsi kelas sebelum & sesudah SMOTE
+    dalam satu kanvas (2 subplots).
     """
     labels = sorted(set(before.keys()) | set(after.keys()))
     label_names = {
@@ -167,194 +230,242 @@ def plot_pie(before: Dict[int, int], after: Dict[int, int], out_png: Path) -> No
     plt.subplot(1, 2, 1)
     if sum(before_vals) > 0:
         plt.pie(before_vals, labels=label_texts, autopct="%.1f%%", startangle=90)
-    plt.title("Before SMOTE")
+    plt.title(f"Before SMOTE ({dataset})")
 
     plt.subplot(1, 2, 2)
     if sum(after_vals) > 0:
         plt.pie(after_vals, labels=label_texts, autopct="%.1f%%", startangle=90)
-    plt.title("After SMOTE")
+    plt.title(f"After SMOTE ({dataset})")
 
     _savefig(out_png)
 
 
-# ---------- Core: SMOTE pada events_train ----------
+# ---------- Resolusi strategi sampling ----------
+def _resolve_sampling_strategy(
+    before_counts: Dict[int, int],
+    sampling_strategy: Union[str, Dict[int, int]],
+) -> Union[str, Dict[int, int]]:
+    """
+    Resolusi parameter sampling_strategy untuk SMOTE.
 
+    - Jika dict:
+        -> dipakai apa adanya (mode advanced, tidak dibahas di tesis).
+    - Jika string:
+        * 'not majority' / 'not_majority'  -> 'not majority'
+        * 'auto'                           -> 'auto'
+        * selain itu                        -> fallback ke 'not majority'
+    """
+    if isinstance(sampling_strategy, dict):
+        _log(f"[SMOTE] Menggunakan custom dict sampling_strategy: {sampling_strategy}")
+        return sampling_strategy
+
+    mode = sampling_strategy.strip().lower()
+
+    if mode in {"not majority", "not_majority"}:
+        _log("[SMOTE] sampling_strategy='not majority' (SMOTE standar multi-class).")
+        return "not majority"
+
+    if mode == "auto":
+        _log("[SMOTE] sampling_strategy='auto' (delegasi penuh ke SMOTE).")
+        return "auto"
+
+    _log(
+        f"[SMOTE] sampling_strategy='{sampling_strategy}' tidak dikenal, "
+        "fallback ke 'not majority'."
+    )
+    return "not majority"
+
+
+# ---------- Core: SMOTE pada {dataset}_train ----------
 def run_smote_events(
+    dataset: str = "events",
     overwrite: bool = False,
     random_state: int = 42,
-    sampling_strategy="not majority",
+    sampling_strategy: Union[str, Dict[int, int]] = "not majority",
     k_neighbors: int = 5,
 ) -> None:
     """
-    Jalankan SMOTE pada data training gabungan (events_train):
+    Jalankan SMOTE pada data training gabungan ({dataset}_train):
 
-    - Input  : data/processed/events_train.csv (fitur + 'label')
-    - Output : data/processed/events_train_smote.csv
+    - Input  : data/processed/{dataset}_train.csv  (fitur + label multi-class)
+    - Output : data/processed/{dataset}_train_smote.csv
 
     Parameter penting:
+    - dataset           : prefix nama dataset (default 'events')
+    - overwrite         : jika True, regenerasi meskipun file hasil sudah ada
     - random_state      : seed untuk reproducibility
-    - sampling_strategy : default 'not majority' (upsample semua kelas minoritas)
-    - k_neighbors       : tetangga SMOTE (default=5)
+    - sampling_strategy :
+          * 'not majority' (default, digunakan di tesis)
+          * 'auto'
+          * dict custom {class_label: target_count} jika dipanggil dari Python
+    - k_neighbors       : jumlah tetangga SMOTE (default=5)
     """
-    events_train_path = PROCESSED / "events_train.csv"
-    events_smote_path = PROCESSED / "events_train_smote.csv"
-    summary_path = TAB / "events_smote_summary.csv"
-    bar_path = FIG / "events_smote_bar.png"
-    pie_path = FIG / "events_smote_pie.png"
+    train_path = PROCESSED / f"{dataset}_train.csv"
+    smote_path = PROCESSED / f"{dataset}_train_smote.csv"
+    summary_path = TAB / f"{dataset}_smote_summary.csv"
+    bar_path = FIG / f"{dataset}_smote_bar.png"
+    pie_path = FIG / f"{dataset}_smote_pie.png"
+    config_path = ART / f"{dataset}_smote_config.joblib"
 
     if (
-        events_smote_path.exists()
+        smote_path.exists()
         and summary_path.exists()
         and bar_path.exists()
         and pie_path.exists()
         and not overwrite
     ):
-        print(
-            "[SMOTE] events_train_smote.csv & ringkasan sudah ada, "
+        _log(
+            f"[SMOTE] {dataset}_train_smote.csv & ringkasan sudah ada, "
             "gunakan --overwrite untuk regenerasi."
         )
         return
 
-    if not events_train_path.exists():
+    if not train_path.exists():
         raise FileNotFoundError(
-            f"[SMOTE] {events_train_path} tidak ditemukan. "
+            f"[SMOTE] {train_path} tidak ditemukan. "
             "Pastikan preprocessing.py sudah dijalankan."
         )
 
-    df = _read_csv(events_train_path)
-    if "label" not in df.columns:
-        raise KeyError(
-            "[SMOTE] Kolom 'label' tidak ditemukan di events_train.csv. "
-            "Pastikan preprocessing.py menghasilkan label 0/1/2."
-        )
+    df = _read_csv(train_path)
 
-    # Pisahkan fitur & target
-    y = df["label"].astype("int64")
-    X = df.drop(columns=["label"])
+    target_col = _find_target_column(df)
+    y = df[target_col].astype("int64")
+    X = df.drop(columns=[target_col])
 
-    # Bersihkan nilai inf/NaN (preprocessing sebelumnya sudah scaling dan imputasi,
-    # tetapi langkah ini menjaga agar SMOTE tidak error).
+    # Bersihkan nilai inf/NaN (jaga-jaga)
     X = _replace_non_finite(X)
 
-    print("[SMOTE] events_train shape sebelum SMOTE:", X.shape)
-    print("[SMOTE] Distribusi label sebelum SMOTE:", _class_counts(y))
+    _log(f"[SMOTE] {dataset}_train shape sebelum SMOTE: {X.shape}")
+    before_counts = _class_counts(y)
+    _log(f"[SMOTE] Distribusi label sebelum SMOTE: {before_counts}")
 
     # Sesuaikan k_neighbors bila kelas minoritas sangat sedikit
-    class_counts = _class_counts(y)
-    min_count = min(class_counts.values())
+    min_count = min(before_counts.values())
     k_eff = min(k_neighbors, max(1, min_count - 1))
     if k_eff < k_neighbors:
-        print(
+        _log(
             f"[SMOTE] k_neighbors={k_neighbors} terlalu besar untuk kelas minoritas, "
             f"disesuaikan menjadi {k_eff}."
         )
 
+    # Resolusi strategi sampling (string preset -> string/dict final)
+    sampling_resolved = _resolve_sampling_strategy(before_counts, sampling_strategy)
+
     smote = SMOTE(
         random_state=random_state,
-        sampling_strategy=sampling_strategy,
+        sampling_strategy=sampling_resolved,
         k_neighbors=k_eff,
     )
 
     X_res, y_res = smote.fit_resample(X, y)
-    print("[SMOTE] events_train shape sesudah SMOTE:", X_res.shape)
+    _log(f"[SMOTE] {dataset}_train shape sesudah SMOTE: {X_res.shape}")
 
     df_res = pd.DataFrame(X_res, columns=X.columns)
-    df_res["label"] = y_res.astype("int64")
+    df_res[target_col] = y_res.astype("int64")
 
     # Simpan data hasil resampling
-    df_res.to_csv(events_smote_path, index=False)
+    df_res.to_csv(smote_path, index=False)
 
     # Ringkasan kelas sebelum & sesudah
-    before = _class_counts(y)
-    after = _class_counts(y_res)
+    after_counts = _class_counts(y_res)
 
+    all_classes = sorted(set(before_counts.keys()) | set(after_counts.keys()))
     summary_df = pd.DataFrame(
         {
-            "class": sorted(set(before.keys()) | set(after.keys())),
-            "count_before": [before.get(c, 0) for c in sorted(before.keys() | after.keys())],
-            "count_after": [after.get(c, 0) for c in sorted(before.keys() | after.keys())],
+            "class": all_classes,
+            "count_before": [before_counts.get(c, 0) for c in all_classes],
+            "count_after": [after_counts.get(c, 0) for c in all_classes],
         }
     )
     _savetab(summary_df, summary_path)
 
     # Plot
-    plot_bar(before, after, bar_path)
-    plot_pie(before, after, pie_path)
+    plot_bar(before_counts, after_counts, dataset, bar_path)
+    plot_pie(before_counts, after_counts, dataset, pie_path)
 
     # Simpan metadata config sederhana
-    from joblib import dump
     dump(
         {
+            "dataset": dataset,
+            "target_column": target_col,
             "random_state": random_state,
-            "sampling_strategy": sampling_strategy,
+            "sampling_strategy_raw": sampling_strategy,
+            "sampling_strategy_resolved": sampling_resolved,
             "k_neighbors_requested": k_neighbors,
             "k_neighbors_used": k_eff,
-            "before_counts": before,
-            "after_counts": after,
-            "inputs": str(events_train_path),
-            "outputs": str(events_smote_path),
+            "before_counts": before_counts,
+            "after_counts": after_counts,
+            "input_path": str(train_path),
+            "output_path": str(smote_path),
         },
-        ART / "events_smote_config.joblib",
+        config_path,
     )
 
-    print("[SMOTE] Selesai oversampling events_train dengan SMOTE standar.")
-    print("        Output:", events_smote_path.name)
-    print("        Summary:", summary_path.name)
-    print("        Figures:", bar_path.name, ",", pie_path.name)
+    _log(f"[SMOTE] Selesai oversampling {dataset}_train dengan SMOTE.")
+    _log(
+        f"        Output  : {smote_path.name}\n"
+        f"        Summary : {summary_path.name}\n"
+        f"        Figures : {bar_path.name}, {pie_path.name}\n"
+        f"        Config  : {config_path.name}"
+    )
 
 
 # ---------- CLI ----------
-
 def main() -> None:
     ap = argparse.ArgumentParser(
-        description="SMOTE pipeline sederhana untuk events_train (multi-class 0/1/2)."
+        description=(
+            "SMOTE pipeline sederhana untuk {dataset}_train (multi-class 0/1/2). "
+            "Default dataset='events'."
+        )
+    )
+    ap.add_argument(
+        "--dataset",
+        type=str,
+        default="events",
+        help="prefix nama dataset di data/processed (default: 'events').",
     )
     ap.add_argument(
         "--overwrite",
         action="store_true",
-        help="overwrite events_train_smote.csv dan ringkasan jika sudah ada",
+        help="overwrite *_train_smote.csv dan ringkasan jika sudah ada.",
     )
     ap.add_argument(
         "--random-state",
         type=int,
         default=42,
-        help="seed random untuk SMOTE (default=42)",
+        help="seed random untuk SMOTE (default=42).",
     )
     ap.add_argument(
         "--sampling-strategy",
         type=str,
-        default="'not majority'",
+        default="not majority",
         help=(
-            "strategi sampling SMOTE (default='not majority'). "
-            "Bisa 'auto', 'not majority', atau literal Python yang valid, "
-            "misalnya '{1: 500, 2: 300}'."
+            "strategi sampling SMOTE. Pilihan utama:\n"
+            "  - 'not majority' (default): upsample semua minoritas ke mayoritas\n"
+            "  - 'auto'         : delegasi ke SMOTE\n"
+            "Untuk eksperimen lanjutan, run_smote_events bisa dipanggil dari "
+            "Python dengan dict custom {class_label: target_count}."
         ),
     )
     ap.add_argument(
         "--k-neighbors",
         type=int,
         default=5,
-        help="jumlah tetangga SMOTE (default=5)",
+        help="jumlah tetangga SMOTE (default=5).",
     )
     args = ap.parse_args()
 
-    # parsing aman untuk sampling_strategy
-    sampling_strategy = args.sampling_strategy
-    try:
-        # Jika string mengandung dict / list / string literal, gunakan ast.literal_eval
-        sampling_strategy = ast.literal_eval(sampling_strategy)
-    except Exception:
-        # fallback: pakai string apa adanya (mis. 'not majority', 'auto')
-        sampling_strategy = args.sampling_strategy
+    _log("[SMOTE] Pipeline start (multi-class)…")
 
-    print("[SMOTE] Pipeline start (events, multi-class)…")
     run_smote_events(
+        dataset=args.dataset,
         overwrite=args.overwrite,
         random_state=args.random_state,
-        sampling_strategy=sampling_strategy,
+        sampling_strategy=args.sampling_strategy,
         k_neighbors=args.k_neighbors,
     )
-    print(
+
+    _log(
         f"[DONE] SMOTE pipeline selesai.\n"
         f" - DATA : {PROCESSED}\n"
         f" - TAB  : {TAB}\n"

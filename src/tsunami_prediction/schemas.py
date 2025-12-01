@@ -7,17 +7,67 @@ from typing import List, Optional
 from pydantic import BaseModel, Field
 
 
-# ==========================
-#   TECTONIC SCHEMAS
-# ==========================
+# ============================================================
+#  COMMON: HASIL PREDIKSI (UNTUK RESPONSE API)
+# ============================================================
+class TsunamiPredictionBase(BaseModel):
+    """
+    Skema dasar hasil prediksi tsunami untuk satu kejadian.
+    Dipakai baik untuk gempa tektonik maupun gunung api.
+
+    Catatan:
+    - predicted_label: 0 = non-tsunami, 1 = tsunami
+    - Untuk endpoint khusus (tektonik / vulkanik), makna label_name
+      bisa dijelaskan di dokumentasi (mis. 'Tectonic tsunami').
+    """
+
+    predicted_label: int = Field(
+        ...,
+        ge=0,
+        le=1,
+        description="Label biner hasil prediksi: 0 = non-tsunami, 1 = tsunami.",
+    )
+    predicted_label_name: str = Field(
+        ...,
+        description="Nama/keterangan label prediksi (mis. 'Non-tsunami' atau 'Tsunami').",
+    )
+    prob_non_tsunami: float = Field(
+        ...,
+        ge=0.0,
+        le=1.0,
+        description="Probabilitas kelas 0 (non-tsunami).",
+    )
+    prob_tsunami: float = Field(
+        ...,
+        ge=0.0,
+        le=1.0,
+        description="Probabilitas kelas 1 (tsunami).",
+    )
+    decision_threshold: float = Field(
+        ...,
+        ge=0.0,
+        le=1.0,
+        description=(
+            "Threshold keputusan yang dipakai model saat mengubah "
+            "probabilitas menjadi label biner (mis. 0.50 atau 0.88)."
+        ),
+    )
+
+
+# ============================================================
+#  TECTONIC SCHEMAS (REQUEST + RESPONSE)
+# ============================================================
 class TectonicItem(BaseModel):
     """
     Satu kejadian gempa tektonik untuk inferensi API.
 
-    Kolom utamanya diselaraskan dengan tabel data clean tektonik:
+    Kolom diselaraskan dengan tabel data clean tektonik:
     id, year, month, day, hr, mn, sec, country, area, region, location,
-    latitude, longitude, depth, mag, plus dua fitur rekayasa utama:
+    latitude, longitude, depth, mag, plus fitur rekayasa:
     distance_to_coast_km dan is_subduction_zone.
+
+    Hanya subset numerik utama yang digunakan langsung oleh model;
+    kolom lain tetap diterima untuk keperluan metadata/logging.
     """
 
     # --- informasi identitas & waktu (opsional) ---
@@ -60,7 +110,7 @@ class TectonicItem(BaseModel):
         description="Detik origin time (0–59).",
     )
 
-    # --- parameter fisis utama (wajib) ---
+    # --- parameter fisis utama (WAJIB untuk model) ---
     mag: float = Field(
         ...,
         description="Magnitudo gempa (mis. Mw). Fitur utama untuk model tsunami tektonik.",
@@ -83,7 +133,7 @@ class TectonicItem(BaseModel):
         description="Bujur episenter (derajat).",
     )
 
-    # --- konteks geografis (kategorikal) ---
+    # --- konteks geografis (kategorikal, opsional) ---
     country: Optional[str] = Field(
         None,
         description="Negara tempat kejadian (sesuai katalog).",
@@ -97,7 +147,7 @@ class TectonicItem(BaseModel):
         alias="zone",
         description=(
             "Nama/kode region tektonik. "
-            "Pada versi terdahulu disebut 'zone'; keduanya diterima oleh API."
+            "Pada versi terdahulu disebut 'zone'; kedua nama field diterima oleh API."
         ),
     )
     location: Optional[str] = Field(
@@ -105,7 +155,7 @@ class TectonicItem(BaseModel):
         description="Lokasi deskriptif (kota terdekat / lokasi katalog).",
     )
 
-    # --- fitur rekayasa (opsional; akan dihitung ulang bila pipeline mendukung) ---
+    # --- fitur rekayasa (opsional) ---
     distance_to_coast_km: Optional[float] = Field(
         0.0,
         ge=0,
@@ -119,8 +169,8 @@ class TectonicItem(BaseModel):
         ge=0,
         le=1,
         description=(
-            "1 jika kejadian berada di negara/subduksi utama, 0 jika tidak. "
-            "Dapat diabaikan karena bisa diturunkan dari 'country'."
+            "1 jika kejadian berada di zona subduksi utama, 0 jika tidak. "
+            "Dapat diabaikan karena bisa diturunkan dari 'country' / region."
         ),
     )
 
@@ -132,13 +182,64 @@ class TectonicItem(BaseModel):
 class TectonicRequest(BaseModel):
     """
     Request batch untuk prediksi tsunami tektonik.
+
+    Contoh bentuk JSON:
+
+    {
+      "datas": [
+        {
+          "year": 2024,
+          "month": 1,
+          "day": 1,
+          "mag": 7.5,
+          "depth": 10.0,
+          "latitude": -3.5,
+          "longitude": 135.2
+        }
+      ]
+    }
     """
+
     datas: List[TectonicItem]
 
 
-# ==========================
-#   VOLCANIC SCHEMAS
-# ==========================
+class TectonicPrediction(TsunamiPredictionBase):
+    """
+    Hasil prediksi untuk satu TectonicItem.
+    Bisa ditambahkan field echo input_id kalau diperlukan.
+    """
+
+    index: int = Field(
+        ...,
+        ge=0,
+        description="Indeks item dalam batch request (0-based).",
+    )
+
+
+class TectonicResponse(BaseModel):
+    """
+    Response batch untuk prediksi tsunami tektonik.
+    """
+
+    model_name: str = Field(
+        ...,
+        description="Nama model stacking yang digunakan (mis. 'events_smote_stacking_lr').",
+    )
+    model_version: Optional[str] = Field(
+        None,
+        description="Versi model / timestamp training (opsional).",
+    )
+    n_items: int = Field(
+        ...,
+        ge=0,
+        description="Jumlah item yang diprediksi.",
+    )
+    predictions: List[TectonicPrediction]
+
+
+# ============================================================
+#  VOLCANIC SCHEMAS (REQUEST + RESPONSE)
+# ============================================================
 class VolcanicItem(BaseModel):
     """
     Satu kejadian gunung api untuk inferensi API.
@@ -147,6 +248,9 @@ class VolcanicItem(BaseModel):
     id, year, month, day, name, location, country, latitude, longitude,
     elevation, type, status, vei, eq, agent, plus fitur rekayasa
     distance_to_coast_km dan is_subduction_zone.
+
+    Hanya subset numerik utama yang digunakan langsung oleh model;
+    kolom lain tetap diterima untuk keperluan metadata/logging.
     """
 
     # --- identitas & waktu (opsional) ---
@@ -243,7 +347,7 @@ class VolcanicItem(BaseModel):
         le=1,
         description=(
             "1 jika gunung api berada pada busur subduksi utama, 0 jika tidak. "
-            "Dapat diturunkan dari 'country'."
+            "Dapat diturunkan dari 'country' / setting tektonik regional."
         ),
     )
 
@@ -251,5 +355,54 @@ class VolcanicItem(BaseModel):
 class VolcanicRequest(BaseModel):
     """
     Request batch untuk prediksi tsunami vulkanik.
+
+    Contoh bentuk JSON:
+
+    {
+      "datas": [
+        {
+          "year": 2020,
+          "name": "Example Volcano",
+          "latitude": -1.2,
+          "longitude": 120.5,
+          "vei": 4,
+          "eq": 10
+        }
+      ]
+    }
     """
+
     datas: List[VolcanicItem]
+
+
+class VolcanicPrediction(TsunamiPredictionBase):
+    """
+    Hasil prediksi untuk satu VolcanicItem.
+    """
+
+    index: int = Field(
+        ...,
+        ge=0,
+        description="Indeks item dalam batch request (0-based).",
+    )
+
+
+class VolcanicResponse(BaseModel):
+    """
+    Response batch untuk prediksi tsunami vulkanik.
+    """
+
+    model_name: str = Field(
+        ...,
+        description="Nama model stacking yang digunakan (mis. 'events_smote_stacking_lr').",
+    )
+    model_version: Optional[str] = Field(
+        None,
+        description="Versi model / timestamp training (opsional).",
+    )
+    n_items: int = Field(
+        ...,
+        ge=0,
+        description="Jumlah item yang diprediksi.",
+    )
+    predictions: List[VolcanicPrediction]

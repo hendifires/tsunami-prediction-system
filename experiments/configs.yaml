@@ -24,7 +24,8 @@ global:
   fast: false
   fast_n: 5000
 
-  # Disiapkan kalau nanti mau dipakai untuk salin output ke folder khusus
+  # Jika true, stacking_pipeline akan menyimpan ringkasan lengkap
+  # (per-run) ke reports/tables dan reports/figures
   collect_outputs: true
 
 # Opsional: jalankan tiap run dengan multi-seed (override global.random_state)
@@ -39,13 +40,15 @@ runs:
     ablation: false
     # kalau mau nyalakan grid khusus run ini:
     # meta_grid: true
+    # collect_outputs: true   # bisa override global jika perlu
 
   # Ablation penuh: nosmote + smote + smote_tomek + smote_enn
   - name: ablation_full
     datasets: ["tectonic", "volcanic"]
     use_smote: "auto"
     ablation: true        # akan jalankan semua varian SMOTE
-    # meta_grid: false    # eksplisit matikan grid (opsional, karena global sudah false)
+    # meta_grid: false    # eksplisit matikan grid (opsional)
+    # collect_outputs: true
 
   # Contoh run spesifik volcanic (tanpa SMOTE)
   - name: volcanic_nosmote_only

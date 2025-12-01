@@ -2,26 +2,31 @@ from __future__ import annotations
 # cSpell:ignore nosmote smoteenn tomek cohen
 
 """
-Statistical comparison (paired t-test + Cohen's d) for:
-1) Base learners vs stacking meta-learner (Logistic Regression).
-2) SMOTE ablation (nosmote vs smote variants) for stacking.
+Paired statistical tests (paired t-test + Cohen's d) untuk pipeline stacking terbaru.
 
-Input:
-    reports/tables/<dataset>_stack_<variant>_cv5_cvfolds.csv
+Fokus:
+1) Perbandingan base learners vs stacking meta-learner (Logistic Regression)
+   pada setiap dataset & varian sampling (nosmote / SMOTE / SMOTE-Tomek / SMOTE-ENN).
+2) Ablation SMOTE: nosmote vs varian SMOTE KHUSUS untuk model stacking_lr_meta.
 
-    File ini dibuat oleh stacking_pipeline.py yang sudah dimodifikasi.
-    Struktur kolom:
-        dataset, variant, model, fold,
-        accuracy, precision, recall, f1, roc_auc, pr_auc
+Input utama (per-fold metrics):
+
+    reports/tables/<dataset>_stack_<variant>_cv<cv>_cvfolds.csv
+
+File ini dihasilkan oleh stacking_pipeline.py versi terbaru, dengan kolom:
+
+    dataset, variant, model, fold,
+    accuracy, precision, recall, f1, roc_auc, pr_auc
 
 Output:
-    1) Base vs Stacking:
-        - reports/tables/paired_tests_base_vs_stack.csv
-        - reports/tables/paired_tests_base_vs_stack.md
 
-    2) SMOTE ablation (nosmote vs varian SMOTE) untuk stacking_lr_meta:
-        - reports/tables/paired_tests_smote_ablation.csv
-        - reports/tables/paired_tests_smote_ablation.md
+  1) Base vs Stacking
+     - reports/tables/paired_tests_base_vs_stack.csv
+     - reports/tables/paired_tests_base_vs_stack.md
+
+  2) SMOTE ablation (nosmote vs varian SMOTE) untuk stacking_lr_meta:
+     - reports/tables/paired_tests_smote_ablation.csv
+     - reports/tables/paired_tests_smote_ablation.md
 """
 
 import argparse
@@ -30,22 +35,23 @@ from typing import List, Dict, Optional
 
 import numpy as np
 import pandas as pd
-
 from scipy import stats  # pastikan sudah terinstall
 
-# ---------- PATHS ----------
-ROOT = Path(__file__).resolve().parents[2]
-REPORTS = ROOT / "reports"
-TAB = REPORTS / "tables"
-FIG = REPORTS / "figures"  # tidak dipakai sekarang, tapi disiapkan
-
-for p in (TAB, FIG):
-    p.mkdir(parents=True, exist_ok=True)
+from tsunami_prediction.utils import TAB, REPORTS, FIG, ensure_dirs
 
 
-# ---------- KONSTANTA ----------
+# ---------- KONSTANTA & PATH ----------
+# pastikan struktur folder project sudah ada
+ensure_dirs()
+
+# default dataset mengikuti model utama: tektonik & vulkanik
+# (jika nanti ada model global "events", bisa dipanggil via argumen --datasets events)
 DATASETS_DEFAULT: List[str] = ["tectonic", "volcanic"]
+
+# varian balancing sesuai pipeline SMOTE terbaru
 VARIANTS_DEFAULT: List[str] = ["nosmote", "smote", "smote_tomek", "smote_enn"]
+
+# metrik yang disimpan stacking_pipeline.py
 METRICS_DEFAULT: List[str] = [
     "accuracy",
     "precision",
@@ -55,7 +61,8 @@ METRICS_DEFAULT: List[str] = [
     "pr_auc",
 ]
 
-# base learners yang dibandingkan vs stacking
+# base learners yang dikomparasikan terhadap stacking
+# (harus sama dengan nama model yang dipakai di stacking_pipeline.py)
 BASE_MODELS_FOR_COMPARE: List[str] = ["rf", "gb", "dt", "nb", "knn"]
 STACK_MODEL_NAME: str = "stacking_lr_meta"
 
@@ -80,7 +87,11 @@ def _cohen_d_paired(a: np.ndarray, b: np.ndarray) -> Dict[str, float]:
     """
     Cohen's d untuk desain berpasangan: d = mean(diff) / sd(diff),
     dengan diff = b - a (pasangan).
-    Juga kembalikan t-statistik dan p-value (two-sided).
+
+    Juga mengembalikan:
+        - t-statistik
+        - p-value (two-sided)
+        - n (jumlah pasangan)
     """
     a = np.asarray(a, dtype=float)
     b = np.asarray(b, dtype=float)
@@ -90,14 +101,26 @@ def _cohen_d_paired(a: np.ndarray, b: np.ndarray) -> Dict[str, float]:
     diff = b - a
     n = diff.size
     if n < 2:
-        return {"n": float(n), "mean_diff": np.nan, "t": np.nan, "p": np.nan, "d": np.nan}
+        return {
+            "n": float(n),
+            "mean_diff": np.nan,
+            "t": np.nan,
+            "p": np.nan,
+            "d": np.nan,
+        }
 
     mean_diff = float(np.mean(diff))
     sd_diff = float(np.std(diff, ddof=1))
 
     if sd_diff == 0.0:
-        # tidak ada variasi -> statistik t & d tidak terdefinisi
-        return {"n": float(n), "mean_diff": mean_diff, "t": np.nan, "p": np.nan, "d": np.nan}
+        # tidak ada variasi antarfold → t dan d tidak terdefinisi
+        return {
+            "n": float(n),
+            "mean_diff": mean_diff,
+            "t": np.nan,
+            "p": np.nan,
+            "d": np.nan,
+        }
 
     # t-test berpasangan
     t_stat = mean_diff / (sd_diff / np.sqrt(n))
@@ -118,14 +141,19 @@ def _load_cvfolds(dataset: str, variant: str, cv: int) -> Optional[pd.DataFrame]
     """
     Membaca file per-fold metrics:
         reports/tables/<dataset>_stack_<variant>_cv<cv>_cvfolds.csv
+
+    Contoh:
+        tectonic_stack_smote_cv5_cvfolds.csv
+        volcanic_stack_nosmote_cv5_cvfolds.csv
     """
     path = TAB / f"{dataset}_stack_{variant}_cv{cv}_cvfolds.csv"
     if not path.exists():
         _log(f"[SKIP] cvfolds file not found: {path.name}")
         return None
+
     try:
         df = pd.read_csv(path)
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001
         _log(f"[WARN] failed to read {path.name}: {exc}")
         return None
 
@@ -145,9 +173,9 @@ def compute_base_vs_stack_tests(
 ) -> pd.DataFrame:
     """
     Paired t-test dan Cohen's d:
-        base_model (rf,gb,dt,nb,knn) vs stacking_lr_meta
+        base_model (rf, gb, dt, nb, knn) vs stacking_lr_meta
 
-    Pairing: fold yang sama di dalam (dataset, variant).
+    Pairing menggunakan fold yang sama di dalam (dataset, variant).
     """
     rows: List[Dict[str, object]] = []
 
@@ -157,12 +185,11 @@ def compute_base_vs_stack_tests(
             if df_cv is None:
                 continue
 
-            # pastikan kolom yang dibutuhkan ada
             if not {"model", "fold"}.issubset(df_cv.columns):
                 _log(f"[SKIP] 'model' atau 'fold' tidak ada di {ds}/{var}")
                 continue
 
-            # pastikan stacking tersedia
+            # subset stacking sebagai model referensi
             df_stack = df_cv[df_cv["model"] == STACK_MODEL_NAME]
             if df_stack.empty:
                 _log(f"[INFO] No stacking model in {ds}/{var}, skip base-vs-stack.")
@@ -174,7 +201,7 @@ def compute_base_vs_stack_tests(
                     _log(f"[INFO] base model '{base}' missing in {ds}/{var}, skip.")
                     continue
 
-                # align berdasarkan fold (hanya fold yang ada di kedua model)
+                # align berdasarkan fold
                 merged = pd.merge(
                     df_base,
                     df_stack,
@@ -183,7 +210,8 @@ def compute_base_vs_stack_tests(
                 )
                 if merged.empty:
                     _log(
-                        f"[INFO] No overlapping folds for {ds}/{var} base={base} vs stacking."
+                        f"[INFO] No overlapping folds for {ds}/{var} "
+                        f"base={base} vs stacking."
                     )
                     continue
 
@@ -192,18 +220,20 @@ def compute_base_vs_stack_tests(
                     col_stack = f"{metric}_stack"
                     if col_base not in merged.columns or col_stack not in merged.columns:
                         _log(
-                            f"[INFO] metric '{metric}' missing for {ds}/{var}, base={base}"
+                            f"[INFO] metric '{metric}' missing for {ds}/{var}, "
+                            f"base={base}"
                         )
                         continue
 
                     a = merged[col_base].to_numpy(dtype=float)
                     b = merged[col_stack].to_numpy(dtype=float)
 
-                    stats_dict = _cohen_d_paired(a, b)  # diff = b - a (stack - base)
+                    stats_dict = _cohen_d_paired(a, b)  # diff = stack - base
                     n = stats_dict["n"]
                     if n < 2:
                         _log(
-                            f"[INFO] too few folds (n={n}) for {ds}/{var}, base={base}, metric={metric}"
+                            f"[INFO] too few folds (n={n}) for {ds}/{var}, "
+                            f"base={base}, metric={metric}"
                         )
                         continue
 
@@ -214,10 +244,9 @@ def compute_base_vs_stack_tests(
                         "model_base": base,
                         "model_ref": STACK_MODEL_NAME,
                         "n_folds": n,
-                        # rata-rata
                         "mean_base": float(np.mean(a)),
                         "mean_ref": float(np.mean(b)),
-                        # definisi diff = ref - base = stacking - base
+                        # diff = ref - base = stacking - base
                         "mean_diff_ref_minus_base": stats_dict["mean_diff"],
                         "t_stat": stats_dict["t"],
                         "p_value": stats_dict["p"],
@@ -246,7 +275,6 @@ def compute_smote_ablation_tests(
     """
     rows: List[Dict[str, object]] = []
 
-    # pastikan nosmote ada di daftar varian
     if "nosmote" not in variants:
         _log("[WARN] 'nosmote' tidak ada di variants; SMOTE ablation tidak bisa dihitung.")
         return pd.DataFrame()
@@ -278,7 +306,6 @@ def compute_smote_ablation_tests(
                 _log(f"[SMOTE] stacking missing for {ds}/{var}, skip.")
                 continue
 
-            # align berdasarkan fold
             merged = pd.merge(
                 df_nosm,
                 df_var,
@@ -296,18 +323,20 @@ def compute_smote_ablation_tests(
                 col_var = f"{metric}_var"
                 if col_base not in merged.columns or col_var not in merged.columns:
                     _log(
-                        f"[SMOTE] metric '{metric}' missing for {ds}: nosmote vs {var}"
+                        f"[SMOTE] metric '{metric}' missing for {ds}: "
+                        f"nosmote vs {var}"
                     )
                     continue
 
                 a = merged[col_base].to_numpy(dtype=float)  # baseline nosmote
-                b = merged[col_var].to_numpy(dtype=float)   # smote variant
+                b = merged[col_var].to_numpy(dtype=float)   # SMOTE variant
 
-                stats_dict = _cohen_d_paired(a, b)  # diff = b - a (var - base)
+                stats_dict = _cohen_d_paired(a, b)  # diff = variant - baseline
                 n = stats_dict["n"]
                 if n < 2:
                     _log(
-                        f"[SMOTE] too few folds (n={n}) for {ds}: nosmote vs {var}, metric={metric}"
+                        f"[SMOTE] too few folds (n={n}) for {ds}: nosmote vs {var}, "
+                        f"metric={metric}"
                     )
                     continue
 
@@ -335,7 +364,7 @@ def compute_smote_ablation_tests(
 def main() -> None:
     ap = argparse.ArgumentParser(
         description=(
-            "Paired t-test & Cohen's d untuk basal vs stacking dan SMOTE ablation "
+            "Paired t-test & Cohen's d untuk base vs stacking dan SMOTE ablation "
             "menggunakan metrics per-fold (cv=5)."
         )
     )
@@ -375,7 +404,6 @@ def main() -> None:
     if df_bvs.empty:
         _log("[RESULT] Tidak ada hasil untuk base vs stacking.")
     else:
-        # urutkan untuk rapi
         df_bvs = df_bvs.sort_values(
             ["dataset", "variant", "metric", "model_base"]
         ).reset_index(drop=True)

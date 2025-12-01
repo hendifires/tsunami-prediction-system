@@ -1,38 +1,35 @@
 <# -------------
-Run-all pipeline (Windows PowerShell)
-Steps:
+Run-all pipeline (Windows PowerShell) — versi sederhana untuk tesis
+
+Langkah utama:
   0) Activate venv
-  1) Preprocessing         (raw -> processed/*)
-  2) EDA                   (figures & tables)
-  3) Feature Engineering   (+OHE, +distance-to-coast jika shapefile ada)
-  4) SMOTE pipeline        (smote / smote_tomek / smoteenn)
-  5) Stacking              (train + threshold tuning, opsi ablation)
-  6) Experiments           (experiments/configs.yaml)
-  7) Compare runs          (compare_runs + SMOTE effects)
-  8) Tests (pytest)        [opsional]
-  9) Interface (FastAPI)   [opsional]
+  1) Feature Engineering          (tectonic + volcanic -> events_fe.csv)
+  2) EDA                          (tectonic & volcanic)
+  3) Window 1900–2024:
+       - Preprocessing (year_min=1900)
+       - SMOTE (events_train -> events_train_smote)
+       - Stacking (nosmote + smote)
+       - Rename metrics -> *_y1900_2024_metrics.csv
+  4) Window 2000–2024:
+       - Preprocessing (year_min=2000)
+       - SMOTE (events_train -> events_train_smote)
+       - Stacking (nosmote + smote)
+       - Rename metrics -> *_y2000_2024_metrics.csv
+  5) Compare stacking runs        (multi-metric, multi-year)
+  6) Analyze stacking result      (classification report & CM)
+  7) Tests (pytest)               [opsional]
+  8) Interface (FastAPI)          [opsional]
 -------------#>
 
 param(
-  [string[]]$Datasets = @("tectonic","volcanic"),
-  [string]$CoastPath  = "data/coastline/ne_10m_coastline.shp",
-  [ValidateSet("auto","yes","no")] [string]$UseSmote = "auto",
-  [int]$CV = 3,
-  [switch]$Ablation,
-  [switch]$StartUI,
   [switch]$RunTests,
-  [switch]$WithMLP,
-  [switch]$Fast,
-  [int]$FastN = 5000,
-  [ValidateSet("none","pearson","rfe")] [string]$FeatureSelect = "none",
-  [int]$TopN = 30,
-  [switch]$MetaGrid   # NEW: kalau mau nyalain grid search meta-learner
+  [switch]$StartUI
 )
 
 $ErrorActionPreference = "Stop"
 
 # -------------------------------------------------------------------
-# Helper untuk mencetak durasi setiap step
+# Helper: cetak durasi setiap step
 # -------------------------------------------------------------------
 function Invoke-Step([string]$Title, [scriptblock]$Action) {
   Write-Host "`n=== $Title ===" -ForegroundColor Cyan
@@ -58,6 +55,10 @@ function Test-PyModule([string]$Name) {
 $here = Split-Path -Parent $MyInvocation.MyCommand.Path
 Set-Location (Join-Path $here "..")
 
+# Direktori penting (relatif terhadap root project)
+$TabDir = Join-Path (Get-Location) "reports\tables"
+$FigDir = Join-Path (Get-Location) "reports\figures"
+
 # 0) venv
 Invoke-Step "0) Activate venv" {
   if (Test-Path .\.venv\Scripts\Activate.ps1) {
@@ -67,85 +68,115 @@ Invoke-Step "0) Activate venv" {
   }
 }
 
-# 1) Preprocessing (raw -> processed/*)
-Invoke-Step "1) Preprocessing (clean CSV)" {
-  python -m tsunami_prediction.preprocessing
+# 1) Feature Engineering (bangun tectonic_fe, volcanic_fe, events_fe)
+Invoke-Step "1) Feature Engineering (build events_fe.csv)" {
+  # Versi FE ringan: OHE + gabung events
+  python -m tsunami_prediction.feature_engineering --overwrite --materialize-ohe
 }
 
-# 2) EDA (gambar & tabel ringkas)
+# 2) EDA (gambar & tabel ringkas untuk tectonic & volcanic)
 Invoke-Step "2) EDA (figures & tables)" {
-  # default: tectonic + volcanic; bisa override lewat param --datasets
-  python -m tsunami_prediction.eda --datasets @Datasets
+  python -m tsunami_prediction.eda --datasets tectonic volcanic
 }
 
-# 3) Feature Engineering (tambahkan distance-to-coast jika shapefile ada)
-Invoke-Step "3) Feature Engineering (+OHE, +coastline bila ada)" {
-  $feArgs = @("--overwrite","--materialize-ohe")
-  if (Test-Path $CoastPath) {
-    Write-Host "  > Coastline found: $CoastPath"
-    $feArgs += @("--coast", $CoastPath)
-  } else {
-    Write-Warning "  > Coastline shapefile tidak ditemukan: $CoastPath (lewati penambahan jarak pantai)."
-  }
-  python -m tsunami_prediction.feature_engineering @feArgs
-}
+# ---------------------------------------------------------------
+# Helper untuk 1 window tahun (year_min tertentu)
+# ---------------------------------------------------------------
+function Run-Window(
+  [int]$YearMin,
+  [string]$YearTag  # contoh: "y1900_2024" atau "y2000_2024"
+) {
 
-# 4) SMOTE splits (smote / smote_tomek / smoteenn)
-Invoke-Step "4) SMOTE pipeline (smote / tomek / enn)" {
-  $baseArgs = @("--datasets") + $Datasets + @("--overwrite")
+  Write-Host "`n--- RUN WINDOW: year_min=$YearMin (tag=$YearTag) ---" -ForegroundColor Magenta
 
-  python -m tsunami_prediction.smote_pipeline @baseArgs --variant smote
-  python -m tsunami_prediction.smote_pipeline @baseArgs --variant smote_tomek
-  python -m tsunami_prediction.smote_pipeline @baseArgs --variant smoteenn
-}
-
-# 5) Stacking (train + threshold tuning)
-Invoke-Step "5) Stacking (train + threshold tuning)" {
-  $stackArgs = @(
-    "--datasets") + $Datasets + @(
-    "--cv", $CV,
-    "--random-state", 42,
-    "--feature-select", $FeatureSelect,
-    "--top-n", $TopN,
-    "--use-smote", $UseSmote
-  )
-
-  # meta-grid OFF secara default (lebih cepat); bisa dinyalakan dengan -MetaGrid
-  if ($MetaGrid) {
-    $stackArgs += "--meta-grid"
-  } else {
-    $stackArgs += "--no-meta-grid"
+  # 3.x.1) Preprocessing untuk year_min tertentu
+  Invoke-Step "Preprocessing events (year_min=$YearMin)" {
+    python -m tsunami_prediction.preprocessing `
+      --input "data/processed/events_fe.csv" `
+      --dataset-name "events" `
+      --year-min $YearMin `
+      --test-size 0.2 `
+      --random-state 42
   }
 
-  if ($WithMLP) { $stackArgs += "--with-mlp" }
-  if ($Fast)    { $stackArgs += @("--fast","--fast-n",$FastN) }
-  if ($Ablation){ $stackArgs += "--ablation" }
+  # 3.x.2) SMOTE (events_train -> events_train_smote)
+  Invoke-Step "SMOTE pipeline (events, year_min=$YearMin)" {
+    python -m tsunami_prediction.smote_pipeline `
+      --dataset events `
+      --overwrite `
+      --random-state 42 `
+      --sampling-strategy "not majority" `
+      --k-neighbors 5
+  }
 
-  python -m tsunami_prediction.stacking_pipeline @stackArgs
-}
+  # 3.x.3) Stacking (nosmote + smote) untuk window ini
+  Invoke-Step "Stacking (nosmote + smote, year_min=$YearMin)" {
+    python -m tsunami_prediction.stacking_pipeline `
+      --variant both `
+      --random-state 42
+  }
 
-# 6) Experiments (configs.yaml) – opsional
-Invoke-Step "6) Experiments (configs.yaml)" {
-  if (Test-Path "experiments\configs.yaml") {
-    python experiments/run_experiment.py --config experiments/configs.yaml
-  } else {
-    Write-Warning "experiments/configs.yaml tidak ditemukan; lewati langkah experiment."
+  # 3.x.4) Rename metrics → tambahkan tag tahun (YearTag)
+  Invoke-Step "Rename metrics for tag $YearTag" {
+
+    # Sumber file generic (hasil run stacking terakhir)
+    $nosmoteSrc = Join-Path $TabDir "events_nosmote_metrics.csv"
+    $smoteSrc   = Join-Path $TabDir "events_smote_metrics.csv"
+
+    # Nama file tujuan (hanya nama file, bukan full path)
+    $nosmoteDstName = "events_nosmote_{0}_metrics.csv" -f $YearTag
+    $smoteDstName   = "events_smote_{0}_metrics.csv"   -f $YearTag
+
+    # ========= NOSMOTE =========
+    if (Test-Path $nosmoteSrc) {
+      $nosmoteDst = Join-Path $TabDir $nosmoteDstName
+
+      # Jika sudah ada, hapus dulu supaya tidak error
+      if (Test-Path $nosmoteDst) {
+        Remove-Item $nosmoteDst -Force
+      }
+
+      Rename-Item -LiteralPath $nosmoteSrc -NewName $nosmoteDstName
+      Write-Host "  > Renamed: events_nosmote_metrics.csv -> $nosmoteDstName"
+    } else {
+      Write-Warning "  > Source metrics not found (nosmote): $nosmoteSrc"
+    }
+
+    # ========= SMOTE =========
+    if (Test-Path $smoteSrc) {
+      $smoteDst = Join-Path $TabDir $smoteDstName
+
+      if (Test-Path $smoteDst) {
+        Remove-Item $smoteDst -Force
+      }
+
+      Rename-Item -LiteralPath $smoteSrc -NewName $smoteDstName
+      Write-Host "  > Renamed: events_smote_metrics.csv -> $smoteDstName"
+    } else {
+      Write-Warning "  > Source metrics not found (smote): $smoteSrc"
+    }
   }
 }
 
-# 7) Compare runs (compare_runs + SMOTE effects)
-Invoke-Step "7) Compare runs + SMOTE effects" {
-  try {
-    # compare_runs sekarang otomatis hitung efek SMOTE (tanpa --effects)
-    python -m tsunami_prediction.compare_runs
-  } catch {
-    Write-Warning "compare_runs gagal: $_"
-  }
+# 3) Window 1900–2024
+Run-Window -YearMin 1900 -YearTag "y1900_2024"
+
+# 4) Window 2000–2024
+Run-Window -YearMin 2000 -YearTag "y2000_2024"
+
+# 5) Compare stacking runs (multi-metric, multi-year)
+Invoke-Step "5) Compare stacking runs (multi-metric, multi-year)" {
+  python -m tsunami_prediction.compare_stacking_runs
 }
 
-# 8) Tests (opsional, butuh pytest)
+# 6) Analyze stacking result (classification report & confusion matrix)
+Invoke-Step "6) Analyze stacking result (best SMOTE stacking)" {
+  python -m tsunami_prediction.analyze_stacking_results
+}
+
+# 7) Tests (opsional, butuh pytest)
 if ($RunTests) {
-  Invoke-Step "8) Unit tests (pytest)" {
+  Invoke-Step "7) Unit tests (pytest)" {
     if (Test-PyModule "pytest") {
       python -m pytest -q tests/tests_pipeline.py
     } else {
@@ -156,8 +187,8 @@ if ($RunTests) {
   Write-Host "`nLewati tests (aktifkan dengan -RunTests)." -ForegroundColor DarkYellow
 }
 
-# 9) Interface (opsional)
-Invoke-Step "9) Interface (FastAPI UI)" {
+# 8) Interface (opsional)
+Invoke-Step "8) Interface (FastAPI UI)" {
   if ($StartUI) {
     if (Test-Path "interface\app.py") {
       Write-Host "Menjalankan FastAPI (Ctrl+C untuk stop)..." -ForegroundColor Cyan
@@ -174,7 +205,7 @@ Invoke-Step "9) Interface (FastAPI UI)" {
 }
 
 Write-Host "`nSelesai. Artefak utama:" -ForegroundColor Green
-Write-Host " - artifacts\*.joblib        (model + decision_threshold)"
-Write-Host " - reports\figures\*         (EDA, CM/ROC/PR, threshold sweep, stacking_architecture, dsb.)"
-Write-Host " - reports\tables\*          (metrics/preds/ablation, model_hyperparams, runtime_summary, EDA)"
-Write-Host " - data\processed\*           (train/test + SMOTE splits)"
+Write-Host " - artifacts\*.joblib        (model Stacking + base learners)"
+Write-Host " - reports\figures\*         (EDA, CM/ROC, multi-metric multi-year)"
+Write-Host " - reports\tables\*          (metrics/preds + stacking_experiments_all_metrics.csv)"
+Write-Host " - data\processed\*          (events_fe, events_train/test, events_train_smote)"

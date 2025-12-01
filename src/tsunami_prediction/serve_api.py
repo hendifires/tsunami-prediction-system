@@ -11,6 +11,7 @@ import numpy as np
 import pandas as pd
 from joblib import load as joblib_load
 
+
 # ============================== PATHS ==============================
 ROOT = Path(__file__).resolve().parents[2]
 ART = ROOT / "artifacts"
@@ -18,7 +19,10 @@ ART = ROOT / "artifacts"
 
 # =================== Compat for pickled FunctionTransformer ===================
 def to_np_writable(X):
-    """Helper yang dipakai saat training; harus tersedia saat unpickle."""
+    """
+    Helper yang dipakai saat training (FunctionTransformer) dan
+    HARUS tersedia saat unpickle artifact model.
+    """
     arr = np.asarray(X, dtype=float)
     if not getattr(arr, "flags", None) or not arr.flags.writeable:
         arr = arr.copy()
@@ -26,7 +30,13 @@ def to_np_writable(X):
 
 
 def _ensure_unpickle_compat() -> None:
-    """Pastikan simbol to_np_writable bisa diimpor oleh joblib saat unpickle."""
+    """
+    Pastikan simbol to_np_writable bisa diimpor oleh joblib saat unpickle.
+
+    - Registrar to_np_writable di __main__
+    - Registrar to_np_writable di modul tsunami_prediction.stacking_pipeline
+      supaya artifact lama/baru tetap bisa di-load.
+    """
     # __main__
     main_mod = sys.modules.get("__main__") or types.ModuleType("__main__")
     sys.modules["__main__"] = main_mod
@@ -38,6 +48,7 @@ def _ensure_unpickle_compat() -> None:
     except Exception:
         sp = types.ModuleType("tsunami_prediction.stacking_pipeline")
         sys.modules["tsunami_prediction.stacking_pipeline"] = sp
+
     sys.modules["tsunami_prediction.stacking_pipeline"].to_np_writable = to_np_writable  # type: ignore[attr-defined]
 
 
@@ -186,32 +197,61 @@ def _fe_volcanic(df: pd.DataFrame) -> pd.DataFrame:
 
 # =========================== Artifact helpers ===========================
 def _preferred_artifacts(dataset: str) -> List[Path]:
-    """Urutan prioritas artifact per dataset."""
+    """
+    Urutan prioritas artifact per dataset.
+
+    Diselaraskan dengan pola penamaan di stacking_pipeline.py:
+      <dataset>_<scenario>_<meta>.joblib
+
+    Contoh:
+      events_smote_stacking_lr.joblib
+      tectonic_nosmote_stacking_xgb.joblib
+      volcanic_smote_tomek_stacking.joblib
+    """
     d = dataset.lower()
-    return {
-        "tectonic": [
-            ART / "tectonic_stack_smote.joblib",
-            ART / "tectonic_stack_smote_tomek.joblib",
-            ART / "tectonic_stack_smote_enn.joblib",
-            ART / "tectonic_stack_nosmote.joblib",
-        ],
-        "volcanic": [
-            ART / "volcanic_stack_smote.joblib",        # prioritas utama
-            ART / "volcanic_stack_smote_tomek.joblib",
-            ART / "volcanic_stack_smote_enn.joblib",
-            ART / "volcanic_stack_nosmote.joblib",
-        ],
-    }.get(d, [])
+
+    # prioritas: SMOTE dulu, lalu NOSMOTE; meta-learner LR > XGB > legacy 'stacking'
+    scenarios = ["smote", "smote_tomek", "smote_enn", "nosmote"]
+    metas = ["stacking_lr", "stacking_xgb", "stacking"]
+
+    names: List[str] = []
+    for sc in scenarios:
+        for meta in metas:
+            names.append(f"{d}_{sc}_{meta}.joblib")
+
+    # fallback: nama lama (versi awal)
+    legacy = [
+        f"{d}_stack_smote.joblib",
+        f"{d}_stack_smote_tomek.joblib",
+        f"{d}_stack_smote_enn.joblib",
+        f"{d}_stack_nosmote.joblib",
+    ]
+    names.extend(legacy)
+
+    return [ART / nm for nm in names]
 
 
 def _find_artifact_path(dataset: str) -> Path:
+    """
+    Cari artifact terbaik berdasarkan urutan prioritas.
+
+    Kalau tidak ketemu:
+    - fallback ke pola glob: <dataset>_stack_*.joblib dan <dataset>_*_stacking*.joblib
+    """
+    # 1) berdasarkan urutan preferensi eksplisit
     for p in _preferred_artifacts(dataset):
         if p.exists():
             return p
 
-    # fallback: cari file apapun yang cocok pola "<dataset>_stack_*.joblib"
-    if any_files := list(ART.glob(f"{dataset}_stack_*.joblib")):
-        return any_files[0]
+    # 2) fallback: cari file apa pun yang mengandung pola stacking
+    patterns = [
+        f"{dataset}_stack_*.joblib",
+        f"{dataset}_*_stacking*.joblib",
+    ]
+    for pat in patterns:
+        any_files = sorted(ART.glob(pat))
+        if any_files:
+            return any_files[0]
 
     raise FileNotFoundError(
         f"Model artifact for dataset='{dataset}' not found in {ART}. "
@@ -220,11 +260,32 @@ def _find_artifact_path(dataset: str) -> Path:
 
 
 def _load_artifact(path: Path) -> Dict:
+    """
+    Load artifact joblib dan lakukan validasi minimal.
+    Artifact diharapkan berisi:
+      - 'model'            : estimator terlatih (StackingClassifier, dsb.)
+      - 'feature_columns'  : daftar fitur numerik final
+      - optional 'selected_columns', 'col_name_map', 'meta', 'decision_threshold'
+    """
     _ensure_unpickle_compat()
     obj = joblib_load(path)
-    if "model" not in obj or "feature_columns" not in obj:
+    if not isinstance(obj, dict) or "model" not in obj or "feature_columns" not in obj:
         raise ValueError(f"Invalid artifact content in {path.name}.")
     return obj
+
+
+def load_default_artifact(
+    dataset: str,
+    artifact_path: Optional[str] = None,
+) -> Tuple[Dict, Path]:
+    """
+    Helper publik sederhana untuk membaca artifact default:
+    mengembalikan (artifact_dict, path).
+    Bisa dipakai FastAPI untuk expose info model_name, threshold, dsb.
+    """
+    path = Path(artifact_path) if artifact_path else _find_artifact_path(dataset)
+    art = _load_artifact(path)
+    return art, path
 
 
 # ===== Helpers to align categorical row-wise into existing one-hot columns =====
@@ -254,9 +315,14 @@ def _align_input_to_features(
     dataset: str,
 ) -> Tuple[pd.DataFrame, pd.Index]:
     """
-    AUTO-DETECT mode:
-    - Jika input 'processed-like' (overlap besar dengan feature_columns) → langsung align.
-    - Jika tidak, lakukan FE ringan (RAW mode) dan isi fitur numerik + OHE kategori yang tersedia.
+    AUTO-DETECT mode untuk menyusun matriks fitur X yang identik dengan saat training.
+
+    Langkah:
+    1) Normalisasi nama kolom (safe_name + lower-case).
+    2) Terapkan col_name_map dari artifact (jika ada).
+    3) Deteksi apakah input mirip "processed" (overlap besar dengan feature_columns).
+       - Jika ya  → langsung align (MODE PROCESSED).
+       - Jika tidak → lakukan FE ringan (MODE RAW) lalu align.
     """
     if not isinstance(df_in, pd.DataFrame) or df_in.empty:
         raise ValueError("df_in must be a non-empty DataFrame.")
@@ -267,7 +333,7 @@ def _align_input_to_features(
         df = df.drop(columns=["tsu"])
     df.columns = [_safe_name(str(c).lower()) for c in df.columns]
 
-    # --- mapping nama kolom hasil sanitize saat training (jika artefak menyimpan col_name_map) ---
+    # --- mapping nama kolom hasil sanitize saat training (jika ada col_name_map) ---
     mapping = artifact.get("col_name_map") or {}
     if mapping:
         lower_map = {_safe_name(str(k)).lower(): str(v) for k, v in mapping.items()}
@@ -398,9 +464,7 @@ def _predict_with_artifact(
     - Align fitur input ke feature_columns yang digunakan model.
     - Hitung probabilitas dan label dengan threshold optimal yang tersimpan.
     """
-    path = Path(artifact_path) if artifact_path else _find_artifact_path(dataset)
-    art = _load_artifact(path)
-
+    art, path = load_default_artifact(dataset, artifact_path=artifact_path)
     X, _ = _align_input_to_features(df_new, art, dataset)
     model = art["model"]
 
@@ -412,6 +476,7 @@ def _predict_with_artifact(
         z = np.clip(model.decision_function(X), -20, 20)
         y_prob = 1.0 / (1.0 + np.exp(-z))
     else:
+        # fallback keras: treat output langsung sebagai skor
         y_prob = model.predict(X).astype(float)
 
     # threshold dari artifact (hasil tuning F-beta di training)
@@ -421,8 +486,15 @@ def _predict_with_artifact(
     out = df_new.copy()
     out["prediction"] = y_pred.astype(int)
     out["probability"] = np.asarray(y_prob, dtype=float)
-    # jika ingin ekspose threshold:
-    # out["used_threshold"] = thr
+    out["used_threshold"] = thr
+
+    # simpan sedikit metadata di attrs (tidak mengganggu operasi pandas biasa)
+    meta = art.get("meta", {}) or {}
+    out.attrs["artifact_path"] = str(path)
+    out.attrs["decision_threshold"] = thr
+    out.attrs["model_name"] = meta.get("model_name", path.stem)
+    out.attrs["smote_variant"] = meta.get("smote_variant") or meta.get("variant")
+
     return out
 
 
@@ -433,9 +505,12 @@ def predict_tectonic_stacking(
 ) -> pd.DataFrame:
     """
     Prediksi tsunami untuk kejadian gempa tektonik (batch DataFrame).
-    Kolom minimal yang disarankan: mag, depth, latitude, longitude, country.
-    Kolom tambahan (year/month/day, region/area/location, distance_to_coast_km, is_subduction_zone)
-    akan dimanfaatkan jika tersedia.
+
+    Kolom minimal yang disarankan:
+      - mag, depth, latitude, longitude, country
+
+    Kolom tambahan (year/month/day, region/area/location, distance_to_coast_km,
+    is_subduction_zone, dsb.) akan dimanfaatkan jika tersedia.
     """
     if not isinstance(df_new, pd.DataFrame) or df_new.empty:
         raise ValueError("df_new must be a non-empty DataFrame.")
@@ -448,9 +523,12 @@ def predict_volcanic_stacking(
 ) -> pd.DataFrame:
     """
     Prediksi tsunami untuk kejadian vulkanik (batch DataFrame).
-    Kolom minimal yang disarankan: latitude, longitude, elevation, vei, eq, country.
-    Kolom tambahan (type, status, location, name, agent, distance_to_coast_km, is_subduction_zone)
-    akan dimanfaatkan jika tersedia.
+
+    Kolom minimal yang disarankan:
+      - latitude, longitude, elevation, vei, eq, country
+
+    Kolom tambahan (type, status, location, name, agent,
+    distance_to_coast_km, is_subduction_zone, dsb.) akan dimanfaatkan jika tersedia.
     """
     if not isinstance(df_new, pd.DataFrame) or df_new.empty:
         raise ValueError("df_new must be a non-empty DataFrame.")
