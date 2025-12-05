@@ -17,17 +17,20 @@ Fokus desain baru (selaras dengan metodologi tesis):
        * depth
        * latitude, longitude
        * sig (significance, numerik jika ada)
+       * distance_to_coast_km (jarak ke garis pantai, km)
        * alert / region / country / area / location (kategorikal jika ada)
    - Vulkanik:
        * VEI
        * elevation
        * latitude, longitude
+       * distance_to_coast_km (jarak ke garis pantai, km)
        * (opsional) eq (jumlah gempa sekitar gunung)
 
-3) Feature engineering tambahan hanya untuk EDA:
+3) Feature engineering tambahan (ringan, terutama untuk EDA):
    - Transformasi sederhana: log1p, kuadrat, rasio.
+   - Turunan untuk coastal distance:
+       * dist_coast_log1p = log1p(distance_to_coast_km)
    - TIDAK lagi membuat fitur kompleks seperti:
-       * jarak ke pantai,
        * subduction flag,
        * time-gap antar kejadian,
        * encoding siklis waktu (sin/cos),
@@ -164,6 +167,11 @@ def _clip_physical_ranges(df: pd.DataFrame) -> pd.DataFrame:
         out["eq"] = _num(out["eq"]).clip(lower=0)
     if "sig" in out.columns:
         out["sig"] = _num(out["sig"]).clip(lower=0)
+    # coastal distance (km): 0 – 2000 km (clamp ringan)
+    if "distance_to_coast_km" in out.columns:
+        out["distance_to_coast_km"] = _num(out["distance_to_coast_km"]).clip(
+            lower=0, upper=2000
+        )
     return out
 
 
@@ -278,7 +286,8 @@ def engineer_common(df: pd.DataFrame) -> pd.DataFrame:
 
     - normalisasi nama kolom magnitudo dan lat/lon
     - clipping nilai fisik
-    - lintang absolut + indikator daerah tropis (untuk EDA)
+    - lintang absolut + indikator daerah tropis
+    - coastal distance (distance_to_coast_km) + transformasi log1p
     """
     out = df.copy()
     out = _normalize_mag_cols(out)
@@ -288,6 +297,12 @@ def engineer_common(df: pd.DataFrame) -> pd.DataFrame:
     if "latitude" in out.columns:
         out["abs_lat"] = _num(out["latitude"]).abs()
         out["is_tropic"] = (out["abs_lat"] <= 23.5).astype("Int64")
+
+    # FE untuk coastal distance (jika tersedia)
+    if "distance_to_coast_km" in out.columns:
+        dist = _num(out["distance_to_coast_km"]).clip(lower=0)
+        out["distance_to_coast_km"] = dist
+        out["dist_coast_log1p"] = np.log1p(dist)
 
     return out
 
@@ -300,7 +315,8 @@ def engineer_tectonic(df: pd.DataFrame) -> Tuple[pd.DataFrame, List[str], List[s
         Mag -> mag, Focal Depth (km) -> depth, Latitude/Longitude -> latitude/longitude,
         Tsu -> tsu, Year -> year.
     - Fitur inti:
-        mag, depth, latitude, longitude, sig (jika ada), year
+        mag, depth, latitude, longitude, sig (jika ada), year,
+        distance_to_coast_km (+ dist_coast_log1p jika ada)
     - Turunan sederhana untuk EDA:
         depth_log1p, mag_sq, mag_over_depth1p
     - Kolom kategorikal utama:
@@ -331,6 +347,8 @@ def engineer_tectonic(df: pd.DataFrame) -> Tuple[pd.DataFrame, List[str], List[s
             "depth_log1p",
             "mag_sq",
             "mag_over_depth1p",
+            "distance_to_coast_km",
+            "dist_coast_log1p",
         ]
         if c in out.columns
     ]
@@ -368,7 +386,8 @@ def engineer_volcanic(df: pd.DataFrame) -> Tuple[pd.DataFrame, List[str], List[s
         VEI -> vei, Elevation (m) -> elevation, Eq -> eq,
         Latitude/Longitude -> latitude/longitude, Tsu -> tsu, Year -> year.
     - Fitur inti:
-        vei, elevation, eq, latitude, longitude, year
+        vei, elevation, eq, latitude, longitude, year,
+        distance_to_coast_km (+ dist_coast_log1p jika ada)
     - Turunan sederhana untuk EDA:
         elev_log1p, vei_sq, eq_log1p
     - Kolom kategorikal utama:
@@ -398,6 +417,8 @@ def engineer_volcanic(df: pd.DataFrame) -> Tuple[pd.DataFrame, List[str], List[s
             "elev_log1p",
             "vei_sq",
             "eq_log1p",
+            "distance_to_coast_km",
+            "dist_coast_log1p",
         ]
         if c in out.columns
     ]
@@ -661,12 +682,33 @@ def run_one(
         cat_for_ohe: List[str] = []
     else:
         if dataset == "tectonic":
-            default_cat = ["alert", "Country", "Area", "Region",
-                           "Location", "Location Name",
-                           "country", "region", "area", "location"]
+            default_cat = [
+                "alert",
+                "Country",
+                "Area",
+                "Region",
+                "Location",
+                "Location Name",
+                "country",
+                "region",
+                "area",
+                "location",
+            ]
         else:
-            default_cat = ["Type", "Status", "Name", "Agent", "Country", "Location",
-                           "type", "status", "name", "agent", "country", "location"]
+            default_cat = [
+                "Type",
+                "Status",
+                "Name",
+                "Agent",
+                "Country",
+                "Location",
+                "type",
+                "status",
+                "name",
+                "agent",
+                "country",
+                "location",
+            ]
         cat_for_ohe = [c for c in default_cat if c in fe_df.columns]
 
     before = fe_df.shape[1]
@@ -712,6 +754,7 @@ def run_one(
         dump(ohe_cols, ART / f"{dataset}_ohe_feature_names.joblib")
         print(f"[FE] {dataset}: OHE materialized.")
 
+
 # ====================================================
 # BUILD GABUNGAN: events_fe.csv
 # ====================================================
@@ -733,7 +776,9 @@ def build_events_fe(
     volc_path = PROCESSED / volcanic_name
 
     if not tect_path.exists() or not volc_path.exists():
-        print("[FE] build_events_fe: salah satu dari tectonic_fe/volcanic_fe belum ada, skip.")
+        print(
+            "[FE] build_events_fe: salah satu dari tectonic_fe/volcanic_fe belum ada, skip."
+        )
         return
 
     tect_df = _read_csv(tect_path).copy()

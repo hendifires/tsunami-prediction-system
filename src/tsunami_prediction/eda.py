@@ -255,7 +255,16 @@ def correlation_with_target(
 
     time_cols = ["year", "month", "day", "hr", "mn", "sec"]
     spatial_cols = ["latitude", "longitude"]
-    intensity_cols = ["depth", "mag", "mmi_int", "elevation", "vei", "eq"]
+    intensity_cols = [
+        "depth",
+        "mag",
+        "mmi_int",
+        "elevation",
+        "vei",
+        "eq",
+        "distance_to_coast_km",
+        "dist_coast_log1p",
+    ]
 
     ordered: list[str] = []
     for group in (time_cols, spatial_cols, intensity_cols):
@@ -427,6 +436,8 @@ def temporal_plots(
 def spatial_scatter(df: pd.DataFrame, name: str, target: str = "tsu") -> None:
     """
     Sebaran spasial (lon/lat) dengan warna berdasarkan target.
+    Fallback: scatter global sederhana; jika env `EDA_USE_PYGMT=1`,
+    akan mencoba gunakan PyGMT + tile ocean map.
     """
     import os
 
@@ -454,7 +465,14 @@ def spatial_scatter(df: pd.DataFrame, name: str, target: str = "tsu") -> None:
         else:
             plt.scatter(df["longitude"], df["latitude"], s=8, alpha=0.6)
 
-        plt.title(f"Global Scatter (lon/lat) — {name}")
+        if name == "tectonic":
+            title = "Tectonic Events: Global Distribution"
+        elif name == "volcanic":
+            title = "Volcanic Events: Global Distribution"
+        else:
+            title = f"{name.capitalize()} Events: Global Distribution"
+
+        plt.title(title)
         plt.xlabel("Longitude")
         plt.ylabel("Latitude")
         _savefig(FIG / f"{name}_global_scatter_{target}.png")
@@ -681,6 +699,7 @@ def engineered_feature_plots(df: pd.DataFrame, name: str, target: str = "tsu") -
     """
     fe_candidates = [
         "distance_to_coast_km",
+        "dist_coast_log1p",
         # tambahkan di sini kalau ada fitur rekayasa lain
         # "max_wave_height",
         # "time_to_coast_min",
@@ -788,21 +807,49 @@ def run_full_eda(df: pd.DataFrame, ds_name: str, target: str = "tsu") -> None:
     if ds_name == "tectonic":
         numeric_vs_target_distributions(
             df,
-            cols=["mag", "depth", "latitude", "longitude"],
+            cols=[
+                "mag",
+                "depth",
+                "latitude",
+                "longitude",
+                "distance_to_coast_km",
+                "dist_coast_log1p",
+            ],
             target=target,
             name=ds_name,
             outfile="tectonic_num_vs_tsu.png",
         )
-        pp_cols = ["mag", "depth", "latitude", "longitude", target]
+        pp_cols = [
+            "mag",
+            "depth",
+            "latitude",
+            "longitude",
+            "distance_to_coast_km",
+            target,
+        ]
     else:
         numeric_vs_target_distributions(
             df,
-            cols=["eq", "elevation", "latitude", "longitude"],
+            cols=[
+                "eq",
+                "elevation",
+                "latitude",
+                "longitude",
+                "distance_to_coast_km",
+                "dist_coast_log1p",
+            ],
             target=target,
             name=ds_name,
             outfile="volcanic_num_vs_tsu.png",
         )
-        pp_cols = ["vei", "elevation", "latitude", "longitude", target]
+        pp_cols = [
+            "vei",
+            "elevation",
+            "latitude",
+            "longitude",
+            "distance_to_coast_km",
+            target,
+        ]
 
     pairplot_sample(df, pp_cols, hue=target, name=ds_name)
     engineered_feature_plots(df, ds_name, target=target)
@@ -886,6 +933,8 @@ def run_events_eda(df: pd.DataFrame, ds_name: str = "events") -> None:
         "latitude",
         "longitude",
         "abs_lat",
+        "distance_to_coast_km",
+        "dist_coast_log1p",
     ]
     numeric_vs_target_distributions(
         df,
@@ -896,7 +945,16 @@ def run_events_eda(df: pd.DataFrame, ds_name: str = "events") -> None:
     )
 
     # 9) Pairplot sample
-    pp_cols = ["mag", "depth", "elevation", "vei", "latitude", "longitude", target_label]
+    pp_cols = [
+        "mag",
+        "depth",
+        "elevation",
+        "vei",
+        "latitude",
+        "longitude",
+        "distance_to_coast_km",
+        target_label,
+    ]
     pairplot_sample(df, pp_cols, hue=target_label, name=ds_name)
 
     # 10) Fitur rekayasa (jika ada), gunakan target tsu kalau tersedia

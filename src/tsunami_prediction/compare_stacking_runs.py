@@ -10,11 +10,13 @@ Sinkron dengan pipeline baru:
     reports/tables/events_*_metrics.csv
 
   Contoh nama file yang didukung:
-    events_nosmote_metrics.csv                  -> exp_tag = 'latest'
-    events_smote_metrics.csv                    -> exp_tag = 'latest'
-    events_nosmote_y1900_2024_metrics.csv       -> exp_tag = 'y1900_2024'
-    events_smote_y1900_2024_metrics.csv         -> exp_tag = 'y1900_2024'
-    events_smote_y2000_2024_metrics.csv         -> exp_tag = 'y2000_2024'
+    events_all_variants_metrics.csv              -> exp_tag = 'variants'
+    events_nosmote_metrics.csv                   -> exp_tag = 'latest'
+    events_smote_metrics.csv                     -> exp_tag = 'latest'
+    events_nosmote_y1900_2024_metrics.csv        -> exp_tag = 'y1900_2024'
+    events_smote_y1900_2024_metrics.csv          -> exp_tag = 'y1900_2024'
+    events_nosmote_y2000_2024_metrics.csv        -> exp_tag = 'y2000_2024'
+    events_smote_y2000_2024_metrics.csv          -> exp_tag = 'y2000_2024'
     dst.
 
 - Kompatibel baik dengan format metrik lama maupun baru:
@@ -36,6 +38,8 @@ Sinkron dengan pipeline baru:
     * reports/tables/stacking_experiments_all_metrics.csv
     * reports/figures/events_stacking_multi_metric_multi_year.png
     * reports/figures/events_rf_multi_metric_multi_year.png
+    * reports/figures/events_svm_poly_multi_metric_multi_year.png
+    * reports/figures/events_svm_rbf_multi_metric_multi_year.png
 """
 
 from pathlib import Path
@@ -88,6 +92,7 @@ def _parse_name_to_fields(dataset: str, stem: str) -> tuple[str, str, str]:
         events_nosmote_metrics                -> ('events', 'nosmote', 'latest')
         events_smote_y1900_2024_metrics       -> ('events', 'smote', 'y1900_2024')
         events_smote_y2000_2024_metrics       -> ('events', 'smote', 'y2000_2024')
+        events_all_variants_metrics           -> ('events', 'all', 'variants')
     """
     if not stem.endswith("_metrics"):
         raise ValueError(f"Nama file metrik tidak sesuai pola: {stem}")
@@ -104,7 +109,7 @@ def _parse_name_to_fields(dataset: str, stem: str) -> tuple[str, str, str]:
     if len(parts) == 2:
         exp_tag = "latest"
     else:
-        # gabungkan sisa sebagai exp_tag (mis. 'y1900_2024')
+        # gabungkan sisa sebagai exp_tag (mis. 'y1900_2024' atau 'variants')
         exp_tag = "_".join(parts[2:])
 
     return ds, sc, exp_tag
@@ -115,6 +120,7 @@ def load_all_metrics(dataset: str = "events") -> pd.DataFrame:
     Parse semua file metrik menjadi satu DataFrame.
 
     Mendukung:
+        events_all_variants_metrics.csv
         events_nosmote_metrics.csv
         events_smote_metrics.csv
         events_nosmote_y1900_2024_metrics.csv
@@ -139,7 +145,7 @@ def load_all_metrics(dataset: str = "events") -> pd.DataFrame:
         if "dataset" not in df.columns:
             df["dataset"] = ds
 
-        # 2) scenario (nosmote / smote)
+        # 2) scenario (nosmote / smote / all)
         if "scenario" in df.columns:
             pass
         elif "variant" in df.columns:
@@ -147,11 +153,12 @@ def load_all_metrics(dataset: str = "events") -> pd.DataFrame:
         else:
             df["scenario"] = scenario_from_name
 
-        # 3) exp_tag (mis. 'y1900_2024' atau 'latest')
+        # 3) exp_tag (mis. 'y1900_2024', 'y2000_2024', 'variants', 'latest')
         if "exp_tag" not in df.columns:
             df["exp_tag"] = exp_tag
         else:
-            df["exp_tag"] = exp_tag  # override agar sesuai nama file
+            # override supaya konsisten dengan nama file
+            df["exp_tag"] = exp_tag
 
         rows.append(df)
 
@@ -218,8 +225,8 @@ def plot_multi_metric_multi_year(
     """
     Buat grafik komparasi performa (multi-metrik, multi-year) untuk 1 model.
 
-    - x-axis  : exp_tag (mis. 'y1900_2024', 'y2000_2024', 'latest')
-    - bar     : dua warna -> nosmote & smote (scenario)
+    - x-axis  : exp_tag (mis. 'variants', 'y1900_2024', 'y2000_2024', 'latest')
+    - bar     : beberapa warna -> skenario (nosmote, smote, all, ...)
     - subplot : accuracy, f1_macro, prec_macro, rec_macro
     """
     df = df.copy()
@@ -248,18 +255,20 @@ def plot_multi_metric_multi_year(
 
         for j, sc in enumerate(scenarios):
             sub = df[df["scenario"] == sc]
-            # buat mapping exp_tag -> nilai metrik
-            vals = []
+
+            # Mapping exp_tag -> nilai metrik
+            vals: list[float] = []
             for tag in exp_tags:
                 row = sub[sub["exp_tag"] == tag]
                 if row.empty:
                     vals.append(np.nan)
                 else:
                     vals.append(float(row.iloc[0][metric]))
+
             xpos = x + (j - (len(scenarios) - 1) / 2) * width
             ax.bar(xpos, vals, width, label=sc.capitalize())
 
-            # tulis angka di atas bar
+            # label angka di atas bar
             for xx, v in zip(xpos, vals):
                 if np.isnan(v):
                     continue
@@ -311,20 +320,30 @@ def main() -> None:
     df_all_sorted.to_csv(out_csv, index=False)
     _log(f"[Compare] Saved combined metrics to {out_csv}")
 
-    # 4) Grafik multi-metrik, multi-year untuk model utama (stacking)
+    # 4) Grafik multi-metrik, multi-year untuk semua model kunci
+    plot_multi_metric_multi_year(
+        df_all_sorted,
+        dataset="events",
+        model="rf",
+        out_png=FIG / "events_rf_multi_metric_multi_year.png",
+    )
     plot_multi_metric_multi_year(
         df_all_sorted,
         dataset="events",
         model="stacking",
         out_png=FIG / "events_stacking_multi_metric_multi_year.png",
     )
-
-    # 5) Grafik untuk baseline Random Forest
     plot_multi_metric_multi_year(
         df_all_sorted,
         dataset="events",
-        model="rf",
-        out_png=FIG / "events_rf_multi_metric_multi_year.png",
+        model="svm_poly",
+        out_png=FIG / "events_svm_poly_multi_metric_multi_year.png",
+    )
+    plot_multi_metric_multi_year(
+        df_all_sorted,
+        dataset="events",
+        model="svm_rbf",
+        out_png=FIG / "events_svm_rbf_multi_metric_multi_year.png",
     )
 
     _log(
